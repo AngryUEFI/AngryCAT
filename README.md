@@ -9,7 +9,7 @@ Python tool to drive testing with AngryUEFI
 
 # Protocol
 
-AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1036 = 1024+12 Bytes.
+AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1036 = 1024+12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
 
 ## Packets
 A packet is a single request to AngryUEFI or a single response from AngryUEFI. 
@@ -68,7 +68,7 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * ID: 0x80000000
 * Indicates status of the response. It is up to the individual requests and responses whether to use this message.
 * It is recommended to use custom response IDs for more specific and structured responses
-* If a fault happens in AngryUEFI and it can be recovered to the point a message can be sent, AngryUEFI will send this response with status code = 0xFFFFFFFF
+* If a fault happens in AngryUEFI *and* it can be recovered to the point a message can be sent, AngryUEFI will send this response with status code = 0xFFFFFFFF
 
 ### Structure
 * 4 Byte unsigned LE status code - request specific code, by convention 0 means success, 0xFFFFFFFF means AngryUEFI encountered an internal error
