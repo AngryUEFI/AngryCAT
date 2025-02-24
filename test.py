@@ -16,16 +16,17 @@ def tcp_client(host, port, message):
             print(f"Sent: {message}")
 
             # Receive the response (up to 1024 bytes).
-            response = sock.recv(1024)
+            response = sock.recv(1024+12)
             print(f"Received: {response}")
+            print(f"Length: {len(response)}")
             time.sleep(0.5)
 
 if __name__ == '__main__':
     # Configure server address and port.
     HOST = '127.0.0.1'  # Change to the server's address if needed.
-    PORT = 5554        # Change to the desired port number.
+    PORT = 3239        # Change to the desired port number.
     
-    message = b"Hello World!"
+    message = b"A" * 1024
     length = len(message)
 
     packed_bytes = struct.pack('<I', length)
