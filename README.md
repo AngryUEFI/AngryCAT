@@ -70,6 +70,52 @@ These messages are sent from AngryCAT to AngryUEFI.
 * 4 Byte unsigned LE message length
 * Length Bytes message
 
+## SENDUCODE
+* ID: 0x101
+* Places a ucode update in the specified slot
+* AngryUEFI currently has 10 slots in total
+    * Known good ucode - slot 0
+    * Currently testing ucode - slot 1
+    * Base ucodes - slots 2-10
+* returns a STATUS response
+
+### Structure
+* 4 Byte unsigned LE target slot
+* 4 Byte unsigned LE ucode size
+* ucode update bytes
+
+## FLIPBITS
+* ID 0x121
+* Flips the specified bits in the target ucode slot
+* Result is placed in slot 1
+* bit positions are indexed as follows:
+    * index/8 -> target byte
+    * index % 8 -> target bit
+    * the LSB is 0, the MSB is 7
+* Responds with STATUS
+
+### Structure
+* 4 Byte unsigned LE target slot
+* 4 Byte unsinged LE number of bit flips
+* array of 2 Byte unsigned LE of bit positions to flip
+
+## APPLYUCODE
+* ID 0x141
+* Applies the ucode in the specified slot
+* Microcode is applied with interrupts disabled
+* Responds with a UCODERESPONSE
+
+### Structure
+* 4 Byte unsigned LE target slot
+
+## READMSR
+* ID 0x201
+* Reads the specified MSR
+* Responds with a MSRRESPONSE
+
+### Structure
+* 4 Byte unsigned LE target MSR
+
 # Responses
 These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 
@@ -98,3 +144,19 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 
 ### Structure
 * 4 Byte unsinged LE received message length
+
+## UCODERESPONSE
+* ID 0x80000141
+* Returns the `rdtsc` difference
+    * `rdtsc` is run right before and right after the `wrmsr` instruction
+
+### Structure
+* 8 Byte LE unsigned - `rdtsc` difference
+
+## MSRRESPONSE
+* ID 0x80000201
+* Contains the EAX and EDX values are executing the `rdmsr` instruction
+
+### Strucutre
+* 4 Byte LE unsigned - EAX value
+* 4 Byte LE unsigned - EDX value
