@@ -61,6 +61,15 @@ These messages are sent from AngryCAT to AngryUEFI.
 * 4 Byte unsigned LE message length
 * Length Bytes message
 
+## GETMSGSIZE
+* ID: 0x3
+* Expects the size of the send message as a MSGSIZE response
+* AngryUEFI should verify the received message matches the size indicated in the Message Length header
+
+### Structure
+* 4 Byte unsigned LE message length
+* Length Bytes message
+
 # Responses
 These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 
@@ -82,3 +91,10 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 ### Structure
 * 4 Byte unsigned LE message length
 * Length Bytes message
+
+## MSGSIZE
+* ID: 0x80000003
+* Response to a GETMSGSIZE request
+
+### Structure
+* 4 Byte unsinged LE received message length
