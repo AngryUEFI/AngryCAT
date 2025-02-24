@@ -22,7 +22,7 @@ The header is 12 Bytes. Unless otherwise noted integers are unsigned little-endi
 * 4 Byte Message Type
 
 #### Message Length
-32 bit unsigned little-endian integer. Length does not include this field, but all other header fields and the actual payload. The maximum valid length value is thus 8192 Bytes Payload + 4 Bytes Message Type + 4 Bytes Metadata = 8198 Bytes.
+32 bit unsigned little-endian integer. Length does not include this field, but all other header fields and the actual payload. The maximum valid length value is thus 8192 Bytes Payload + 4 Bytes Message Type + 4 Bytes Metadata = 8200 Bytes.
 
 #### Metadata
 * 1 Byte Major Version = 1
