@@ -36,8 +36,9 @@ def send_send_ucode(target_slot: int, ucode: bytes) -> StatusPacket:
 
 def send_apply_ucode(target_slot: int, apply_known_good: bool) -> UcodeResponsePacket:
     """
-    Sends an APPLYUCODE command for the given target slot with the specified flag,
-    and returns the parsed response as a UcodeResponsePacket.
+    Sends an APPLYUCODE command for the given target slot with the specified flag.
+    If apply_known_good is True, the known good update is applied after the test update.
+    Returns the parsed response as a UcodeResponsePacket.
     """
     pkt = ApplyUcodePacket(target_slot=target_slot, apply_known_good=apply_known_good)
     pkt_bytes = pkt.pack()
@@ -48,26 +49,38 @@ def send_apply_ucode(target_slot: int, apply_known_good: bool) -> UcodeResponseP
     return response
 
 class ApplyUcodeTestCase(unittest.TestCase):
-    def test_apply_ucode(self):
-        target_slot = 2
-        # Create a buffer of 5568 bytes (arbitrary content, here filled with 0xAA)
-        ucode_buffer = b'\xAA' * 5568
+    def setUp(self):
+        # Common target slot and ucode update buffer.
+        self.target_slot = 2
+        self.ucode_buffer = b'\xAA' * 5568
 
-        # First, send a SENDUCODE command to load the update into slot 2.
-        send_response = send_send_ucode(target_slot, ucode_buffer)
-        self.assertIsInstance(send_response, StatusPacket,
+    def load_ucode(self):
+        """Helper method to load ucode into slot 2."""
+        response = send_send_ucode(self.target_slot, self.ucode_buffer)
+        self.assertIsInstance(response, StatusPacket,
                               "SENDUCODE response is not a STATUS packet.")
-        self.assertEqual(send_response.status_code, 0,
-                         f"SENDUCODE response status expected 0, got {send_response.status_code}.")
-        self.assertEqual(send_response.text, b"",
+        self.assertEqual(response.status_code, 0,
+                         f"SENDUCODE response status expected 0, got {response.status_code}.")
+        self.assertEqual(response.text, b"",
                          "SENDUCODE response text is not empty.")
 
-        # Now, send an APPLYUCODE command to apply the update in slot 2.
-        # Here we set apply_known_good to False (i.e. do not apply a known good update afterward).
-        apply_response = send_apply_ucode(target_slot, apply_known_good=False)
+    def test_apply_ucode(self):
+        """Test applying the update in slot 2 without restoring the known good update.
+           Verify that the rdtsc difference is greater than 0."""
+        self.load_ucode()
+        apply_response = send_apply_ucode(self.target_slot, apply_known_good=False)
         self.assertIsInstance(apply_response, UcodeResponsePacket,
                               "APPLYUCODE response is not a UCODERESPONSE packet.")
-        # Verify that the rdtsc difference is greater than 0.
+        self.assertGreater(apply_response.rdtsc_diff, 0,
+                           f"Expected rdtsc_diff > 0, got {apply_response.rdtsc_diff}.")
+
+    def test_apply_ucode_with_known_good(self):
+        """Test applying the update in slot 2 and restoring the known good update afterwards.
+           Verify that the rdtsc difference returned is greater than 0."""
+        self.load_ucode()
+        apply_response = send_apply_ucode(self.target_slot, apply_known_good=True)
+        self.assertIsInstance(apply_response, UcodeResponsePacket,
+                              "APPLYUCODE (with known good) response is not a UCODERESPONSE packet.")
         self.assertGreater(apply_response.rdtsc_diff, 0,
                            f"Expected rdtsc_diff > 0, got {apply_response.rdtsc_diff}.")
 

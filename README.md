@@ -113,8 +113,9 @@ These messages are sent from AngryCAT to AngryUEFI.
 ### Structure
 * 4 Byte unsigned LE target slot
 * 4 Byte unsigned LE options
+    * 3 Byte unused
     * 1 Byte flags, Bit 0: LSB
-        * Bit 0 - apply known good update after the test update *Note*: currently not implemented!
+        * Bit 0 - apply known good update after the test update
 
 ## READMSR
 * ID 0x201
