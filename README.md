@@ -76,7 +76,7 @@ These messages are sent from AngryCAT to AngryUEFI.
 * AngryUEFI currently has 10 slots in total
     * Known good ucode - slot 0
     * Currently testing ucode - slot 1
-    * Base ucodes - slots 2-10
+    * Base ucodes - slots 2-9
 * returns a STATUS response
 
 ### Structure
@@ -86,7 +86,7 @@ These messages are sent from AngryCAT to AngryUEFI.
 
 ## FLIPBITS
 * ID 0x121
-* Flips the specified bits in the target ucode slot
+* Flips the specified bits in the source ucode slot
 * Result is placed in slot 1
 * bit positions are indexed as follows:
     * index/8 -> target byte
@@ -95,18 +95,26 @@ These messages are sent from AngryCAT to AngryUEFI.
 * Responds with STATUS
 
 ### Structure
-* 4 Byte unsigned LE target slot
+* 4 Byte unsigned LE source slot
+    * can use slot 1 to flip bits in an already processed update
 * 4 Byte unsinged LE number of bit flips
-* array of 2 Byte unsigned LE of bit positions to flip
+* array of 4 Byte unsigned LE of bit positions to flip
+    * uses 4 byte to support big updates in future revisions
+    * enough space for more than 2000 flips
 
 ## APPLYUCODE
 * ID 0x141
 * Applies the ucode in the specified slot
 * Microcode is applied with interrupts disabled
 * Responds with a UCODERESPONSE
+* Optionally applies the known good update afterwards
+    * this is done directly in the assembly stub to limit executed instructions
 
 ### Structure
 * 4 Byte unsigned LE target slot
+* 4 Byte unsigned LE options
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - apply known good update after the test update *Note*: currently not implemented!
 
 ## READMSR
 * ID 0x201
@@ -124,6 +132,7 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * Indicates status of the response. It is up to the individual requests and responses whether to use this message.
 * It is recommended to use custom response IDs for more specific and structured responses
 * If a fault happens in AngryUEFI *and* it can be recovered to the point a message can be sent, AngryUEFI will send this response with status code = 0xFFFFFFFF
+* Codes > 0x8000000 are reserved for AngryUEFI and indicate errors outside a message handler
 
 ### Structure
 * 4 Byte unsigned LE status code - request specific code, by convention 0 means success, 0xFFFFFFFF means AngryUEFI encountered an internal error
@@ -148,14 +157,18 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 ## UCODERESPONSE
 * ID 0x80000141
 * Returns the `rdtsc` difference
-    * `rdtsc` is run right before and right after the `wrmsr` instruction
+    * `rdtscp` is run before and after the `wrmsr` instruction
+    * *Note*: the emulator does not support `rdtscp`, currently `rdtsc` is used
+    * only some basic instructions are executed to load registers
+    * no memory accesses are done
+    * check AngryUEIF/stubs.s for instruction list
 
 ### Structure
 * 8 Byte LE unsigned - `rdtsc` difference
 
 ## MSRRESPONSE
 * ID 0x80000201
-* Contains the EAX and EDX values are executing the `rdmsr` instruction
+* Contains the EAX and EDX values after executing the `rdmsr` instruction
 
 ### Strucutre
 * 4 Byte LE unsigned - EAX value

@@ -5,20 +5,26 @@ from enum import Enum
 
 class PacketType(Enum):
     # Request Packet Types
-    PING = 0x1
-    MULTIPING = 0x2
-    GETMSGSIZE = 0x3
+    PING         = 0x1
+    MULTIPING    = 0x2
+    GETMSGSIZE   = 0x3
+    SENDUCODE    = 0x101
+    FLIPBITS     = 0x121
+    APPLYUCODE   = 0x141
+    READMSR      = 0x201
     # Response Packet Types
-    STATUS = 0x80000000
-    PONG = 0x80000001
-    MSGSIZE = 0x80000003
+    STATUS       = 0x80000000
+    PONG         = 0x80000001
+    MSGSIZE      = 0x80000003
+    UCODERESPONSE = 0x80000141
+    MSRRESPONSE  = 0x80000201
 
 # Base class for all packets.
 class Packet:
     # Default header values.
-    major = 1
-    minor = 0
-    control = 0  # Bitfield: Bit 0: 0 means end-of-transmission; 1 means another message follows.
+    major    = 1
+    minor    = 0
+    control  = 0  # Bitfield: Bit 0: 0 means end-of-transmission; 1 means another message follows.
     reserved = 0
 
     # Each subclass must set its own message_type as an instance of PacketType.
@@ -54,23 +60,8 @@ class Packet:
         full_packet = header_first4 + remaining
         return parse_packet(full_packet)
 
-# A generic packet for unknown message types.
-class UnknownPacket(Packet):
-    def __init__(self, message_type, payload: bytes):
-        self.message_type = message_type  # expected to be an int
-        self.payload = payload
-
-    def pack(self) -> bytes:
-        header = struct.pack(
-            "<I4B I",
-            len(self.payload) + 8,  # payload + (metadata+msg_type)
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type
-        )
-        return header + self.payload
-
     def __repr__(self):
-        return f"UnknownPacket(message_type=0x{self.message_type:08X}, payload={self.payload})"
+        return f"<{self.__class__.__name__}>"
 
 # ======== Request Packets ========
 
@@ -78,12 +69,6 @@ class PingPacket(Packet):
     message_type = PacketType.PING
 
     def __init__(self, *, payload: bytes = None, message: bytes = None):
-        """
-        If payload is given, parse the internal structure:
-          - 4-byte little-endian integer (message length)
-          - message (as bytes)
-        Otherwise, use the provided message bytes.
-        """
         if payload is not None:
             msg_len = struct.unpack("<I", payload[:4])[0]
             self.message = payload[4:4 + msg_len]
@@ -93,14 +78,12 @@ class PingPacket(Packet):
             raise ValueError("Either payload or message must be provided.")
 
     def pack(self) -> bytes:
-        msg_bytes = self.message  # already bytes
+        msg_bytes = self.message
         payload = struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack(
-            "<I4B I",
-            len(payload) + 8,  # payload + metadata (4) + message_type (4)
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type.value
-        )
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
         return header + payload
 
     def __repr__(self):
@@ -110,13 +93,6 @@ class MultipingPacket(Packet):
     message_type = PacketType.MULTIPING
 
     def __init__(self, *, payload: bytes = None, count: int = None, message: bytes = None):
-        """
-        If payload is provided, parse it as:
-          - 4-byte little-endian integer: count
-          - 4-byte little-endian integer: message length
-          - message (as bytes)
-        Otherwise, use the provided count and message.
-        """
         if payload is not None:
             self.count = struct.unpack("<I", payload[:4])[0]
             msg_len = struct.unpack("<I", payload[4:8])[0]
@@ -129,15 +105,11 @@ class MultipingPacket(Packet):
 
     def pack(self) -> bytes:
         msg_bytes = self.message
-        payload = (struct.pack("<I", self.count) +
-                   struct.pack("<I", len(msg_bytes)) +
-                   msg_bytes)
-        header = struct.pack(
-            "<I4B I",
-            len(payload) + 8,
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type.value
-        )
+        payload = struct.pack("<I", self.count) + struct.pack("<I", len(msg_bytes)) + msg_bytes
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
         return header + payload
 
     def __repr__(self):
@@ -147,12 +119,6 @@ class GetMsgSizePacket(Packet):
     message_type = PacketType.GETMSGSIZE
 
     def __init__(self, *, payload: bytes = None, message: bytes = None):
-        """
-        If payload is provided, parse it as:
-          - 4-byte little-endian integer: message length
-          - message (as bytes)
-        Otherwise, use the provided message.
-        """
         if payload is not None:
             msg_len = struct.unpack("<I", payload[:4])[0]
             self.message = payload[4:4 + msg_len]
@@ -164,16 +130,125 @@ class GetMsgSizePacket(Packet):
     def pack(self) -> bytes:
         msg_bytes = self.message
         payload = struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack(
-            "<I4B I",
-            len(payload) + 8,
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type.value
-        )
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
         return header + payload
 
     def __repr__(self):
         return f"GetMsgSizePacket(message={self.message}, control={self.control})"
+
+class SendUcodePacket(Packet):
+    message_type = PacketType.SENDUCODE
+
+    def __init__(self, *, payload: bytes = None, target_slot: int = None, ucode: bytes = None):
+        # Structure: 4-byte target slot, 4-byte ucode size, then ucode bytes.
+        if payload is not None:
+            self.target_slot = struct.unpack("<I", payload[:4])[0]
+            ucode_size = struct.unpack("<I", payload[4:8])[0]
+            self.ucode = payload[8:8 + ucode_size]
+        elif target_slot is not None and ucode is not None:
+            self.target_slot = target_slot
+            self.ucode = ucode
+        else:
+            raise ValueError("Either payload or both target_slot and ucode must be provided.")
+
+    def pack(self) -> bytes:
+        ucode_size = len(self.ucode)
+        payload = struct.pack("<II", self.target_slot, ucode_size) + self.ucode
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"SendUcodePacket(target_slot={self.target_slot}, ucode_size={len(self.ucode)}, control={self.control})"
+
+class FlipBitsPacket(Packet):
+    message_type = PacketType.FLIPBITS
+
+    def __init__(self, *, payload: bytes = None, source_slot: int = None, flips: list = None):
+        # Structure: 4-byte source slot, 4-byte number of flips, then array of 4-byte bit positions.
+        if payload is not None:
+            self.source_slot = struct.unpack("<I", payload[:4])[0]
+            num_flips = struct.unpack("<I", payload[4:8])[0]
+            self.flip_positions = []
+            for i in range(num_flips):
+                start = 8 + i * 4
+                self.flip_positions.append(struct.unpack("<I", payload[start:start+4])[0])
+        elif source_slot is not None and flips is not None:
+            self.source_slot = source_slot
+            self.flip_positions = flips
+        else:
+            raise ValueError("Either payload or both source_slot and flips must be provided.")
+
+    def pack(self) -> bytes:
+        num_flips = len(self.flip_positions)
+        payload = struct.pack("<II", self.source_slot, num_flips)
+        for pos in self.flip_positions:
+            payload += struct.pack("<I", pos)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"FlipBitsPacket(source_slot={self.source_slot}, num_flips={len(self.flip_positions)}, control={self.control})"
+
+class ApplyUcodePacket(Packet):
+    message_type = PacketType.APPLYUCODE
+
+    def __init__(self, *, payload: bytes = None, target_slot: int = None, apply_known_good: bool = None):
+        # Structure: 4-byte target slot, 4-byte options.
+        # Bit 0 of options indicates whether to apply the known good update.
+        if payload is not None:
+            self.target_slot = struct.unpack("<I", payload[:4])[0]
+            options = struct.unpack("<I", payload[4:8])[0]
+            self.apply_known_good = bool(options & 0x1)
+        elif target_slot is not None and apply_known_good is not None:
+            self.target_slot = target_slot
+            self.apply_known_good = apply_known_good
+        else:
+            raise ValueError("Either payload or both target_slot and apply_known_good must be provided.")
+
+    def pack(self) -> bytes:
+        options = 1 if self.apply_known_good else 0
+        payload = struct.pack("<II", self.target_slot, options)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return (f"ApplyUcodePacket(target_slot={self.target_slot}, "
+                f"apply_known_good={self.apply_known_good}, control={self.control})")
+
+class ReadMsrPacket(Packet):
+    message_type = PacketType.READMSR
+
+    def __init__(self, *, payload: bytes = None, target_msr: int = None):
+        # Structure: 4-byte target MSR.
+        if payload is not None:
+            self.target_msr = struct.unpack("<I", payload[:4])[0]
+        elif target_msr is not None:
+            self.target_msr = target_msr
+        else:
+            raise ValueError("Either payload or target_msr must be provided.")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<I", self.target_msr)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"ReadMsrPacket(target_msr={self.target_msr}, control={self.control})"
 
 # ======== Response Packets ========
 
@@ -181,20 +256,11 @@ class StatusPacket(Packet):
     message_type = PacketType.STATUS
 
     def __init__(self, *, payload: bytes = None, status_code: int = None, text: bytes = b""):
-        """
-        If payload is provided, parse it as:
-          - 4-byte little-endian integer: status code
-          - 4-byte little-endian integer: text length
-          - text (as bytes)
-        Otherwise, use the provided status_code and text.
-        """
+        # Structure: 4-byte status code, 4-byte text length, then text bytes.
         if payload is not None:
             self.status_code = struct.unpack("<I", payload[:4])[0]
             text_len = struct.unpack("<I", payload[4:8])[0]
-            if text_len:
-                self.text = payload[8:8 + text_len]
-            else:
-                self.text = b""
+            self.text = payload[8:8+text_len] if text_len > 0 else b""
         elif status_code is not None:
             self.status_code = status_code
             self.text = text
@@ -203,15 +269,11 @@ class StatusPacket(Packet):
 
     def pack(self) -> bytes:
         text_bytes = self.text
-        payload = (struct.pack("<I", self.status_code) +
-                   struct.pack("<I", len(text_bytes)) +
-                   text_bytes)
-        header = struct.pack(
-            "<I4B I",
-            len(payload) + 8,
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type.value
-        )
+        payload = struct.pack("<I", self.status_code) + struct.pack("<I", len(text_bytes)) + text_bytes
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
         return header + payload
 
     def __repr__(self):
@@ -221,15 +283,10 @@ class PongPacket(Packet):
     message_type = PacketType.PONG
 
     def __init__(self, *, payload: bytes = None, message: bytes = None):
-        """
-        If payload is provided, parse it as:
-          - 4-byte little-endian integer: message length
-          - message (as bytes)
-        Otherwise, use the provided message.
-        """
+        # Structure: 4-byte message length, then message bytes.
         if payload is not None:
             msg_len = struct.unpack("<I", payload[:4])[0]
-            self.message = payload[4:4 + msg_len]
+            self.message = payload[4:4+msg_len]
         elif message is not None:
             self.message = message
         else:
@@ -238,12 +295,10 @@ class PongPacket(Packet):
     def pack(self) -> bytes:
         msg_bytes = self.message
         payload = struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack(
-            "<I4B I",
-            len(payload) + 8,
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type.value
-        )
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
         return header + payload
 
     def __repr__(self):
@@ -253,6 +308,7 @@ class MsgSizePacket(Packet):
     message_type = PacketType.MSGSIZE
 
     def __init__(self, *, payload: bytes = None, received_length: int = None):
+        # Structure: 4-byte received message length.
         if payload is not None:
             self.received_length = struct.unpack("<I", payload[:4])[0]
         elif received_length is not None:
@@ -262,16 +318,62 @@ class MsgSizePacket(Packet):
 
     def pack(self) -> bytes:
         payload = struct.pack("<I", self.received_length)
-        header = struct.pack(
-            "<I4B I",
-            len(payload) + 8,
-            self.major, self.minor, self.control, self.reserved,
-            self.message_type.value
-        )
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
         return header + payload
 
     def __repr__(self):
         return f"MsgSizePacket(received_length={self.received_length}, control={self.control})"
+
+class UcodeResponsePacket(Packet):
+    message_type = PacketType.UCODERESPONSE
+
+    def __init__(self, *, payload: bytes = None, rdtsc_diff: int = None):
+        # Structure: 8-byte rdtsc difference.
+        if payload is not None:
+            self.rdtsc_diff = struct.unpack("<Q", payload[:8])[0]
+        elif rdtsc_diff is not None:
+            self.rdtsc_diff = rdtsc_diff
+        else:
+            raise ValueError("Either payload or rdtsc_diff must be provided.")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<Q", self.rdtsc_diff)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"UcodeResponsePacket(rdtsc_diff={self.rdtsc_diff}, control={self.control})"
+
+class MsrResponsePacket(Packet):
+    message_type = PacketType.MSRRESPONSE
+
+    def __init__(self, *, payload: bytes = None, eax: int = None, edx: int = None):
+        # Structure: 4-byte EAX and 4-byte EDX.
+        if payload is not None:
+            self.eax = struct.unpack("<I", payload[:4])[0]
+            self.edx = struct.unpack("<I", payload[4:8])[0]
+        elif eax is not None and edx is not None:
+            self.eax = eax
+            self.edx = edx
+        else:
+            raise ValueError("Either payload or both eax and edx must be provided.")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<II", self.eax, self.edx)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"MsrResponsePacket(eax={self.eax}, edx={self.edx}, control={self.control})"
 
 # ======== Packet Parser ========
 
@@ -300,12 +402,24 @@ def parse_packet(data: bytes) -> Packet:
         pkt = MultipingPacket(payload=payload)
     elif msg_type == PacketType.GETMSGSIZE.value:
         pkt = GetMsgSizePacket(payload=payload)
+    elif msg_type == PacketType.SENDUCODE.value:
+        pkt = SendUcodePacket(payload=payload)
+    elif msg_type == PacketType.FLIPBITS.value:
+        pkt = FlipBitsPacket(payload=payload)
+    elif msg_type == PacketType.APPLYUCODE.value:
+        pkt = ApplyUcodePacket(payload=payload)
+    elif msg_type == PacketType.READMSR.value:
+        pkt = ReadMsrPacket(payload=payload)
     elif msg_type == PacketType.STATUS.value:
         pkt = StatusPacket(payload=payload)
     elif msg_type == PacketType.PONG.value:
         pkt = PongPacket(payload=payload)
     elif msg_type == PacketType.MSGSIZE.value:
         pkt = MsgSizePacket(payload=payload)
+    elif msg_type == PacketType.UCODERESPONSE.value:
+        pkt = UcodeResponsePacket(payload=payload)
+    elif msg_type == PacketType.MSRRESPONSE.value:
+        pkt = MsrResponsePacket(payload=payload)
     else:
         pkt = UnknownPacket(msg_type, payload)
 
@@ -318,7 +432,6 @@ def parse_packet(data: bytes) -> Packet:
 # ======== Example Usage ========
 if __name__ == "__main__":
     # Example: Create, pack, and parse a PingPacket.
-    # Note: The message is now a bytes object.
     ping = PingPacket(message=b"Hello, AngryUEFI!")
     data_ping = ping.pack()
     print("Ping packet bytes:", data_ping)
