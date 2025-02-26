@@ -25,61 +25,112 @@ class RejectState(Enum):
     PUBMOD_REJECT = 1
     UNKNOWN_REJECT = 2
     SIGNATURE_REJECT = 3
+    CONNECTION_ERROR = 4
 
 # Configurable thresholds.
 DEFAULT_PUBMOD_THRESHOLD = 30000
 DEFAULT_UNKNOWN_THRESHOLD = 100000
 
-def classify_rdtsc(rdtsc_diff, pubmod_threshold, unknown_threshold):
-    """
-    Classify the test result based on the rdtsc difference.
-    Returns one of: RejectState.PUBMOD_REJECT, RejectState.UNKNOWN_REJECT, or RejectState.SIGNATURE_REJECT.
-    """
-    if rdtsc_diff < pubmod_threshold:
+def classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold):
+    if rdtsc_diff < pub_threshold:
         return RejectState.PUBMOD_REJECT
     elif rdtsc_diff < unknown_threshold:
         return RejectState.UNKNOWN_REJECT
     else:
         return RejectState.SIGNATURE_REJECT
 
-def send_flipbits(host, port, flip_slot, flip_positions):
-    """
-    Sends a FLIPBITS command using the specified flip_slot (target slot for bit flips)
-    and list of bit positions to flip. Returns the parsed response packet.
-    If the response is not a STATUS packet with code 0 and it is a STATUS packet,
-    prints its status code and contained text before raising an exception.
-    """
+class PersistentConnection:
+    def __init__(self, host, port, max_retries=5):
+        self.host = host
+        self.port = port
+        self.max_retries = max_retries
+        self.sock = None
+        self.connect()
+
+    def connect(self):
+        """Establish a new socket connection."""
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(5)
+        self.sock.connect((self.host, self.port))
+
+    def send_packet(self, packet_bytes):
+        """Send a packet and return the parsed response.
+           If an error occurs, reconnect and retry up to max_retries.
+        """
+        for attempt in range(self.max_retries):
+            try:
+                self.sock.sendall(packet_bytes)
+                # Use Packet.read_from_socket to parse the response.
+                response = Packet.read_from_socket(self.sock)
+                return response
+            except Exception as e:
+                # On any error, attempt to reconnect and retry.
+                try:
+                    self.connect()
+                except Exception as conn_e:
+                    pass
+                last_error = str(e)
+                time.sleep(0.5)
+        raise Exception(f"Failed to send packet after {self.max_retries} retries: {last_error}")
+
+def send_flipbits(pconn, flip_slot, flip_positions):
+    """Create and send a FLIPBITS packet using the persistent connection."""
     pkt = FlipBitsPacket(source_slot=flip_slot, flips=flip_positions)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((host, port))
-        sock.sendall(pkt.pack())
-        response = Packet.read_from_socket(sock)
+    response = pconn.send_packet(pkt.pack())
     if not (isinstance(response, StatusPacket) and response.status_code == 0):
         if isinstance(response, StatusPacket):
             print(f"FLIPBITS STATUS response: code {response.status_code}, text: {response.text}")
         raise Exception("FLIPBITS command failed")
     return response
 
-def send_apply_ucode(host, port, apply_slot, apply_known_good):
-    """
-    Sends an APPLYUCODE command using the specified apply_slot (target slot for applying update)
-    with the given apply_known_good flag. Returns the parsed UcodeResponsePacket.
-    If the response is not a UcodeResponsePacket and it is a STATUS packet,
-    prints its status code and contained text before raising an exception.
-    """
+def send_apply_ucode(pconn, apply_slot, apply_known_good):
+    """Create and send an APPLYUCODE packet using the persistent connection."""
     pkt = ApplyUcodePacket(target_slot=apply_slot, apply_known_good=apply_known_good)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((host, port))
-        sock.sendall(pkt.pack())
-        response = Packet.read_from_socket(sock)
+    response = pconn.send_packet(pkt.pack())
     if not isinstance(response, UcodeResponsePacket):
         if isinstance(response, StatusPacket):
             print(f"APPLYUCODE STATUS response: code {response.status_code}, text: {response.text}")
         raise Exception("APPLYUCODE did not return UCODERESPONSE")
     return response
 
+def run_single_test(pconn, flip_slot, apply_slot, pos, pub_threshold, unknown_threshold):
+    retries = 0
+    last_error = ""
+    while retries < 5:
+        try:
+            send_flipbits(pconn, flip_slot, [pos])
+            apply_resp = send_apply_ucode(pconn, apply_slot, apply_known_good=False)
+            rdtsc_diff = apply_resp.rdtsc_diff
+            state = classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold)
+            return rdtsc_diff, state, None
+        except Exception as e:
+            last_error = str(e)
+            retries += 1
+            time.sleep(0.5)
+    return None, RejectState.CONNECTION_ERROR, f"Connection error after 5 retries: {last_error}"
+
+def run_double_test(pconn, flip_slot, apply_slot, i, j, pub_threshold, unknown_threshold):
+    retries = 0
+    last_error = ""
+    while retries < 5:
+        try:
+            send_flipbits(pconn, flip_slot, [i, j])
+            apply_resp = send_apply_ucode(pconn, apply_slot, apply_known_good=False)
+            rdtsc_diff = apply_resp.rdtsc_diff
+            state = classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold)
+            return rdtsc_diff, state, None
+        except Exception as e:
+            last_error = str(e)
+            retries += 1
+            time.sleep(0.5)
+    return None, RejectState.CONNECTION_ERROR, f"Connection error after 5 retries: {last_error}"
+
 def load_resume(resume_file, mode):
-    """Load resume state from a JSON file if it exists and matches the mode."""
     if os.path.exists(resume_file):
         with open(resume_file, "r") as f:
             try:
@@ -91,12 +142,10 @@ def load_resume(resume_file, mode):
     return None
 
 def save_resume(resume_file, data):
-    """Save resume state to a JSON file."""
     with open(resume_file, "w") as f:
         json.dump(data, f)
 
 def append_result(results_file, entry):
-    """Append a new test result to the results JSON file."""
     if os.path.exists(results_file):
         with open(results_file, "r") as f:
             try:
@@ -116,11 +165,11 @@ def main():
     parser.add_argument("--mode", type=str, choices=["single", "double"], default="single",
                         help="Test mode: single-bit flip or two-bit flip")
     parser.add_argument("--flipbits-slot", type=int, default=0,
-                        help="Target slot for FLIPBITS command (ucode update location for bit flips)")
+                        help="Target slot for FLIPBITS command")
     parser.add_argument("--apply-slot", type=int, default=0,
                         help="Target slot for APPLYUCODE command")
     parser.add_argument("--update-size", type=int, default=3200, help="Ucode update size in bytes")
-    parser.add_argument("--bit-start", type=int, default=0, help="Start bit position (default 0)")
+    parser.add_argument("--bit-start", type=int, default=0, help="Start bit position")
     parser.add_argument("--bit-end", type=int, default=None,
                         help="End bit position (exclusive); default is update_size*8")
     parser.add_argument("--resume-file", type=str, default="resume.json", help="File for resume state")
@@ -142,7 +191,6 @@ def main():
         n = bit_end - args.bit_start
         total_tests = n * (n - 1) // 2
 
-    # Load resume state if available.
     if args.mode == "single":
         resume_state = load_resume(args.resume_file, "single")
         current_index = resume_state.get("current_index", args.bit_start) if resume_state else args.bit_start
@@ -154,93 +202,141 @@ def main():
         else:
             current_i, current_j = args.bit_start, args.bit_start + 1
 
-    # Counters for results.
     found_signature = 0
     found_unknown = 0
+    found_conn_error = 0
     test_count = 0
     last_rdtsc = 0
     start_time = time.time()
 
-    # The ucode update is assumed to be already loaded in the flipbits slot.
+    # Establish a persistent connection.
+    pconn = PersistentConnection(args.host, args.port, max_retries=5)
+
     if args.mode == "single":
         for pos in range(current_index, bit_end):
             test_count += 1
-            try:
-                send_flipbits(args.host, args.port, args.flipbits_slot, [pos])
-                apply_resp = send_apply_ucode(args.host, args.port, args.apply_slot, apply_known_good=False)
-                rdtsc_diff = apply_resp.rdtsc_diff
-                last_rdtsc = rdtsc_diff
-                state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
-                if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT]:
+            rdtsc_diff, state, error_msg = run_single_test(pconn, args.flipbits_slot, args.apply_slot,
+                                                            pos, args.pubmod_threshold, args.unknown_threshold)
+            if state is not None:
+                last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
+                if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
                     entry = {
                         "mode": "single",
                         "bit_positions": [pos],
                         "rdtsc_diff": rdtsc_diff,
-                        "state": state.name
+                        "state": state.name,
+                        "error": error_msg
                     }
                     append_result(args.results_file, entry)
                     if state == RejectState.SIGNATURE_REJECT:
                         found_signature += 1
                     elif state == RejectState.UNKNOWN_REJECT:
                         found_unknown += 1
-            except Exception as e:
-                sys.stdout.write(f"Test at bit {pos} failed: {e}\r")
-                sys.stdout.flush()
-                continue
+                    elif state == RejectState.CONNECTION_ERROR:
+                        found_conn_error += 1
+            else:
+                entry = {
+                    "mode": "single",
+                    "bit_positions": [pos],
+                    "rdtsc_diff": None,
+                    "state": "UNKNOWN_ERROR",
+                    "error": error_msg
+                }
+                append_result(args.results_file, entry)
 
-            if test_count % 1000 == 0:
+            if test_count % 10 == 0:
                 save_resume(args.resume_file, {"mode": "single", "current_index": pos})
             elapsed = time.time() - start_time
             sys.stdout.write(f"[SINGLE] {test_count}/{total_tests} tests; current bit: {pos}; "
                              f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
-                             f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}    \r")
+                             f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}, "
+                             f"ConnectionError: {found_conn_error}    \r")
             sys.stdout.flush()
     else:
         for i in range(current_i, bit_end):
             j_start = current_j if i == current_i else i + 1
             for j in range(j_start, bit_end):
                 test_count += 1
-                try:
-                    send_flipbits(args.host, args.port, args.flipbits_slot, [i, j])
-                    apply_resp = send_apply_ucode(args.host, args.port, args.apply_slot, apply_known_good=False)
-                    rdtsc_diff = apply_resp.rdtsc_diff
-                    last_rdtsc = rdtsc_diff
-                    state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
-                    if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT]:
+                rdtsc_diff, state, error_msg = run_double_test(pconn, args.flipbits_slot, args.apply_slot,
+                                                               i, j, args.pubmod_threshold, args.unknown_threshold)
+                if state is not None:
+                    last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
+                    if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
                         entry = {
                             "mode": "double",
                             "bit_positions": [i, j],
                             "rdtsc_diff": rdtsc_diff,
-                            "state": state.name
+                            "state": state.name,
+                            "error": error_msg
                         }
                         append_result(args.results_file, entry)
                         if state == RejectState.SIGNATURE_REJECT:
                             found_signature += 1
                         elif state == RejectState.UNKNOWN_REJECT:
                             found_unknown += 1
-                    # No need to reload update because it is persistent.
-                except Exception as e:
-                    sys.stdout.write(f"Test at bits ({i}, {j}) failed: {e}\r")
-                    sys.stdout.flush()
-                    continue
-
-                if test_count % 1000 == 0:
+                        elif state == RejectState.CONNECTION_ERROR:
+                            found_conn_error += 1
+                else:
+                    entry = {
+                        "mode": "double",
+                        "bit_positions": [i, j],
+                        "rdtsc_diff": None,
+                        "state": "UNKNOWN_ERROR",
+                        "error": error_msg
+                    }
+                    append_result(args.results_file, entry)
+                if test_count % 10 == 0:
                     save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
                 elapsed = time.time() - start_time
                 sys.stdout.write(f"[DOUBLE] {test_count}/{total_tests} tests; current pair: ({i}, {j}); "
                                  f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
-                                 f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}    \r")
+                                 f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}, "
+                                 f"ConnectionError: {found_conn_error}    \r")
                 sys.stdout.flush()
 
-    # Final resume update.
     if args.mode == "single":
         save_resume(args.resume_file, {"mode": "single", "current_index": pos})
     else:
         save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
     total_elapsed = time.time() - start_time
     sys.stdout.write(f"\nCompleted {test_count} tests in {total_elapsed:.2f}s. "
-                     f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}.\n")
+                     f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}, "
+                     f"ConnectionError: {found_conn_error}.\n")
     sys.stdout.flush()
+
+class PersistentConnection:
+    def __init__(self, host, port, max_retries=5):
+        self.host = host
+        self.port = port
+        self.max_retries = max_retries
+        self.sock = None
+        self.connect()
+
+    def connect(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(5)
+        self.sock.connect((self.host, self.port))
+
+    def send_packet(self, packet_bytes):
+        last_error = ""
+        for attempt in range(self.max_retries):
+            try:
+                self.sock.sendall(packet_bytes)
+                response = Packet.read_from_socket(self.sock)
+                return response
+            except Exception as e:
+                last_error = str(e)
+                try:
+                    self.connect()
+                except Exception:
+                    pass
+                time.sleep(0.5)
+        raise Exception(f"Failed to send packet after {self.max_retries} retries: {last_error}")
 
 if __name__ == "__main__":
     main()
