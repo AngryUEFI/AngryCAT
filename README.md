@@ -7,6 +7,14 @@
 
 Python tool to drive testing with AngryUEFI
 
+# Dependencies
+Uses uv as package manager, e.g. `pacman -S uv`.
+
+# Running
+`uv run path/to/script.py --arguments --for --script.py`
+* Not all files need extra packages, you might get away with plain python.
+* *Note* The experiments might not write fully valid json, check the end of the file and remove partial entries and add a closing `]` if needed.
+
 # Protocol
 
 AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1036 = 1024+12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
