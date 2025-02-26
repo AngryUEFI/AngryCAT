@@ -141,7 +141,7 @@ def save_resume(resume_file, data):
 # New: Append a JSON object to file, each on its own line.
 def append_result(results_file, entry):
     with open(results_file, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+        f.write(json.dumps(entry) + ",\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Bit Flip Tests for Ucode Update")
