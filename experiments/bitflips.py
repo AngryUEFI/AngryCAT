@@ -16,24 +16,23 @@ from protocol import (
     FlipBitsPacket,
     ApplyUcodePacket,
     UcodeResponsePacket,
-    SendUcodePacket,
     StatusPacket,
     Packet,
 )
 
-# Define an enum for the reject states.
+# Define an enum for reject states.
 class RejectState(Enum):
     PUBMOD_REJECT = 1
     UNKNOWN_REJECT = 2
     SIGNATURE_REJECT = 3
 
-# Configurable thresholds (can be overridden via command-line)
+# Configurable thresholds.
 DEFAULT_PUBMOD_THRESHOLD = 30000
 DEFAULT_UNKNOWN_THRESHOLD = 100000
 
 def classify_rdtsc(rdtsc_diff, pubmod_threshold, unknown_threshold):
     """
-    Classify the test result based on rdtsc difference.
+    Classify the test result based on the rdtsc difference.
     Returns one of: RejectState.PUBMOD_REJECT, RejectState.UNKNOWN_REJECT, or RejectState.SIGNATURE_REJECT.
     """
     if rdtsc_diff < pubmod_threshold:
@@ -43,12 +42,13 @@ def classify_rdtsc(rdtsc_diff, pubmod_threshold, unknown_threshold):
     else:
         return RejectState.SIGNATURE_REJECT
 
-def send_flipbits(host, port, source_slot, flip_positions):
+def send_flipbits(host, port, flip_slot, flip_positions):
     """
-    Sends a FLIPBITS command for the given source slot with the specified list of bit positions.
+    Sends a FLIPBITS command using the specified flip_slot (target slot for flipbits)
+    and list of bit positions to flip.
     Returns the parsed response packet.
     """
-    pkt = FlipBitsPacket(source_slot=source_slot, flips=flip_positions)
+    pkt = FlipBitsPacket(source_slot=flip_slot, flips=flip_positions)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((host, port))
         sock.sendall(pkt.pack())
@@ -57,12 +57,13 @@ def send_flipbits(host, port, source_slot, flip_positions):
         raise Exception("FLIPBITS command failed")
     return response
 
-def send_apply_ucode(host, port, target_slot, apply_known_good):
+def send_apply_ucode(host, port, apply_slot, apply_known_good):
     """
-    Sends an APPLYUCODE command for the given target slot with the specified flag.
+    Sends an APPLYUCODE command using the specified apply_slot (target slot for applyucode)
+    with the given apply_known_good flag.
     Returns the parsed UcodeResponsePacket.
     """
-    pkt = ApplyUcodePacket(target_slot=target_slot, apply_known_good=apply_known_good)
+    pkt = ApplyUcodePacket(target_slot=apply_slot, apply_known_good=apply_known_good)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((host, port))
         sock.sendall(pkt.pack())
@@ -108,10 +109,13 @@ def main():
     parser.add_argument("--port", type=int, default=3239, help="AngryUEFI port")
     parser.add_argument("--mode", type=str, choices=["single", "double"], default="single",
                         help="Test mode: single-bit flip or two-bit flip")
-    parser.add_argument("--target-slot", type=int, default=0, help="Target slot for ucode update (default 0)")
+    parser.add_argument("--flipbits-slot", type=int, default=0,
+                        help="Target slot for FLIPBITS command (ucode update location for bit flips)")
+    parser.add_argument("--apply-slot", type=int, default=0,
+                        help="Target slot for APPLYUCODE command")
     parser.add_argument("--update-size", type=int, default=3200, help="Ucode update size in bytes")
-    parser.add_argument("--bit-start", type=int, default=0x120*8, help="Start bit position (default 0)")
-    parser.add_argument("--bit-end", type=int, default=0x220*8,
+    parser.add_argument("--bit-start", type=int, default=0, help="Start bit position (default 0)")
+    parser.add_argument("--bit-end", type=int, default=None,
                         help="End bit position (exclusive); default is update_size*8")
     parser.add_argument("--resume-file", type=str, default="resume.json", help="File for resume state")
     parser.add_argument("--results-file", type=str, default="results.json", help="File for test results")
@@ -144,19 +148,20 @@ def main():
         else:
             current_i, current_j = args.bit_start, args.bit_start + 1
 
-    # Now count SignatureReject and UnknownReject results.
+    # Counters for results.
     found_signature = 0
     found_unknown = 0
     test_count = 0
     start_time = time.time()
 
-    # The ucode update is assumed to be already loaded in slot args.target_slot.
+    # Assume the ucode update is already loaded in the flipbits slot.
+    # Main test loop.
     if args.mode == "single":
         for pos in range(current_index, bit_end):
             test_count += 1
             try:
-                send_flipbits(args.host, args.port, args.target_slot, [pos])
-                apply_resp = send_apply_ucode(args.host, args.port, args.target_slot, apply_known_good=False)
+                send_flipbits(args.host, args.port, args.flipbits_slot, [pos])
+                apply_resp = send_apply_ucode(args.host, args.port, args.apply_slot, apply_known_good=False)
                 rdtsc_diff = apply_resp.rdtsc_diff
                 state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
                 if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT]:
@@ -188,8 +193,8 @@ def main():
             for j in range(j_start, bit_end):
                 test_count += 1
                 try:
-                    send_flipbits(args.host, args.port, args.target-slot, [i, j])
-                    apply_resp = send_apply_ucode(args.host, args.port, args.target-slot, apply_known_good=False)
+                    send_flipbits(args.host, args.port, args.flipbits_slot, [i, j])
+                    apply_resp = send_apply_ucode(args.host, args.port, args.apply_slot, apply_known_good=False)
                     rdtsc_diff = apply_resp.rdtsc_diff
                     state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
                     if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT]:
@@ -204,7 +209,7 @@ def main():
                             found_signature += 1
                         elif state == RejectState.UNKNOWN_REJECT:
                             found_unknown += 1
-                    # No need to reload update because it is persistent in slot.
+                    # No need to reload update because it is persistent.
                 except Exception as e:
                     sys.stdout.write(f"Test at bits ({i}, {j}) failed: {e}\r")
                     sys.stdout.flush()
