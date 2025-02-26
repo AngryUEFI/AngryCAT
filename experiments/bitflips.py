@@ -222,7 +222,7 @@ def main():
                     "state": state.name,
                     "error": error_msg
                 }
-                append_result(args.results_file, entry)
+                # append_result(args.results_file, entry)
                 if state == RejectState.SIGNATURE_REJECT:
                     found_signature += 1
                 elif state == RejectState.UNKNOWN_REJECT:
@@ -262,7 +262,7 @@ def main():
                         "state": state.name,
                         "error": error_msg
                     }
-                    append_result(args.results_file, entry)
+                    # append_result(args.results_file, entry)
                     if state == RejectState.SIGNATURE_REJECT:
                         found_signature += 1
                     elif state == RejectState.UNKNOWN_REJECT:
