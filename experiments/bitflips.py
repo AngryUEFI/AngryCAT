@@ -48,7 +48,6 @@ class PersistentConnection:
         self.connect()
 
     def connect(self):
-        """Establish a new socket connection."""
         if self.sock:
             try:
                 self.sock.close()
@@ -59,27 +58,22 @@ class PersistentConnection:
         self.sock.connect((self.host, self.port))
 
     def send_packet(self, packet_bytes):
-        """Send a packet and return the parsed response.
-           If an error occurs, reconnect and retry up to max_retries.
-        """
+        last_error = ""
         for attempt in range(self.max_retries):
             try:
                 self.sock.sendall(packet_bytes)
-                # Use Packet.read_from_socket to parse the response.
                 response = Packet.read_from_socket(self.sock)
                 return response
             except Exception as e:
-                # On any error, attempt to reconnect and retry.
+                last_error = str(e)
                 try:
                     self.connect()
-                except Exception as conn_e:
+                except Exception:
                     pass
-                last_error = str(e)
                 time.sleep(0.5)
         raise Exception(f"Failed to send packet after {self.max_retries} retries: {last_error}")
 
 def send_flipbits(pconn, flip_slot, flip_positions):
-    """Create and send a FLIPBITS packet using the persistent connection."""
     pkt = FlipBitsPacket(source_slot=flip_slot, flips=flip_positions)
     response = pconn.send_packet(pkt.pack())
     if not (isinstance(response, StatusPacket) and response.status_code == 0):
@@ -89,7 +83,6 @@ def send_flipbits(pconn, flip_slot, flip_positions):
     return response
 
 def send_apply_ucode(pconn, apply_slot, apply_known_good):
-    """Create and send an APPLYUCODE packet using the persistent connection."""
     pkt = ApplyUcodePacket(target_slot=apply_slot, apply_known_good=apply_known_good)
     response = pconn.send_packet(pkt.pack())
     if not isinstance(response, UcodeResponsePacket):
@@ -173,7 +166,8 @@ def main():
     parser.add_argument("--bit-end", type=int, default=None,
                         help="End bit position (exclusive); default is update_size*8")
     parser.add_argument("--resume-file", type=str, default="resume.json", help="File for resume state")
-    parser.add_argument("--results-file", type=str, default="results.json", help="File for test results")
+    parser.add_argument("--results-file", type=str, default="results.json", help="File for reject results")
+    parser.add_argument("--all-results-file", type=str, default="all_results.json", help="File for all test results")
     parser.add_argument("--pubmod-threshold", type=int, default=DEFAULT_PUBMOD_THRESHOLD,
                         help="Threshold for PubModReject")
     parser.add_argument("--unknown-threshold", type=int, default=DEFAULT_UNKNOWN_THRESHOLD,
@@ -219,30 +213,34 @@ def main():
                                                             pos, args.pubmod_threshold, args.unknown_threshold)
             if state is not None:
                 last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
-                if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
-                    entry = {
-                        "mode": "single",
-                        "bit_positions": [pos],
-                        "rdtsc_diff": rdtsc_diff,
-                        "state": state.name,
-                        "error": error_msg
-                    }
-                    append_result(args.results_file, entry)
-                    if state == RejectState.SIGNATURE_REJECT:
-                        found_signature += 1
-                    elif state == RejectState.UNKNOWN_REJECT:
-                        found_unknown += 1
-                    elif state == RejectState.CONNECTION_ERROR:
-                        found_conn_error += 1
-            else:
+            # Log result to all results file unconditionally.
+            all_entry = {
+                "mode": "single",
+                "bit_positions": [pos],
+                "rdtsc_diff": rdtsc_diff,
+                "state": state.name if state is not None else "UNKNOWN_ERROR",
+                "error": error_msg
+            }
+            append_result(args.all_results_file, all_entry)
+            # For the normal results file, log only if it's a reject.
+            if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
                 entry = {
                     "mode": "single",
                     "bit_positions": [pos],
-                    "rdtsc_diff": None,
-                    "state": "UNKNOWN_ERROR",
+                    "rdtsc_diff": rdtsc_diff,
+                    "state": state.name,
                     "error": error_msg
                 }
                 append_result(args.results_file, entry)
+                if state == RejectState.SIGNATURE_REJECT:
+                    found_signature += 1
+                elif state == RejectState.UNKNOWN_REJECT:
+                    found_unknown += 1
+                elif state == RejectState.CONNECTION_ERROR:
+                    found_conn_error += 1
+            else:
+                # For other states (e.g. PUBMOD_REJECT), we don't count them in the reject stats.
+                pass
 
             if test_count % 10 == 0:
                 save_resume(args.resume_file, {"mode": "single", "current_index": pos})
@@ -261,30 +259,29 @@ def main():
                                                                i, j, args.pubmod_threshold, args.unknown_threshold)
                 if state is not None:
                     last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
-                    if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
-                        entry = {
-                            "mode": "double",
-                            "bit_positions": [i, j],
-                            "rdtsc_diff": rdtsc_diff,
-                            "state": state.name,
-                            "error": error_msg
-                        }
-                        append_result(args.results_file, entry)
-                        if state == RejectState.SIGNATURE_REJECT:
-                            found_signature += 1
-                        elif state == RejectState.UNKNOWN_REJECT:
-                            found_unknown += 1
-                        elif state == RejectState.CONNECTION_ERROR:
-                            found_conn_error += 1
-                else:
+                all_entry = {
+                    "mode": "double",
+                    "bit_positions": [i, j],
+                    "rdtsc_diff": rdtsc_diff,
+                    "state": state.name if state is not None else "UNKNOWN_ERROR",
+                    "error": error_msg
+                }
+                append_result(args.all_results_file, all_entry)
+                if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
                     entry = {
                         "mode": "double",
                         "bit_positions": [i, j],
-                        "rdtsc_diff": None,
-                        "state": "UNKNOWN_ERROR",
+                        "rdtsc_diff": rdtsc_diff,
+                        "state": state.name,
                         "error": error_msg
                     }
                     append_result(args.results_file, entry)
+                    if state == RejectState.SIGNATURE_REJECT:
+                        found_signature += 1
+                    elif state == RejectState.UNKNOWN_REJECT:
+                        found_unknown += 1
+                    elif state == RejectState.CONNECTION_ERROR:
+                        found_conn_error += 1
                 if test_count % 10 == 0:
                     save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
                 elapsed = time.time() - start_time
@@ -303,40 +300,6 @@ def main():
                      f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}, "
                      f"ConnectionError: {found_conn_error}.\n")
     sys.stdout.flush()
-
-class PersistentConnection:
-    def __init__(self, host, port, max_retries=5):
-        self.host = host
-        self.port = port
-        self.max_retries = max_retries
-        self.sock = None
-        self.connect()
-
-    def connect(self):
-        if self.sock:
-            try:
-                self.sock.close()
-            except Exception:
-                pass
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(5)
-        self.sock.connect((self.host, self.port))
-
-    def send_packet(self, packet_bytes):
-        last_error = ""
-        for attempt in range(self.max_retries):
-            try:
-                self.sock.sendall(packet_bytes)
-                response = Packet.read_from_socket(self.sock)
-                return response
-            except Exception as e:
-                last_error = str(e)
-                try:
-                    self.connect()
-                except Exception:
-                    pass
-                time.sleep(0.5)
-        raise Exception(f"Failed to send packet after {self.max_retries} retries: {last_error}")
 
 if __name__ == "__main__":
     main()
