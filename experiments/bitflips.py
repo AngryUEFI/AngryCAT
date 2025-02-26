@@ -44,9 +44,10 @@ def classify_rdtsc(rdtsc_diff, pubmod_threshold, unknown_threshold):
 
 def send_flipbits(host, port, flip_slot, flip_positions):
     """
-    Sends a FLIPBITS command using the specified flip_slot (target slot for flipbits)
-    and list of bit positions to flip.
-    Returns the parsed response packet.
+    Sends a FLIPBITS command using the specified flip_slot (target slot for bit flips)
+    and list of bit positions to flip. Returns the parsed response packet.
+    If the response is not a STATUS packet with code 0 and it is a STATUS packet,
+    prints its status code and contained text before raising an exception.
     """
     pkt = FlipBitsPacket(source_slot=flip_slot, flips=flip_positions)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -54,14 +55,17 @@ def send_flipbits(host, port, flip_slot, flip_positions):
         sock.sendall(pkt.pack())
         response = Packet.read_from_socket(sock)
     if not (isinstance(response, StatusPacket) and response.status_code == 0):
+        if isinstance(response, StatusPacket):
+            print(f"FLIPBITS STATUS response: code {response.status_code}, text: {response.text}")
         raise Exception("FLIPBITS command failed")
     return response
 
 def send_apply_ucode(host, port, apply_slot, apply_known_good):
     """
-    Sends an APPLYUCODE command using the specified apply_slot (target slot for applyucode)
-    with the given apply_known_good flag.
-    Returns the parsed UcodeResponsePacket.
+    Sends an APPLYUCODE command using the specified apply_slot (target slot for applying update)
+    with the given apply_known_good flag. Returns the parsed UcodeResponsePacket.
+    If the response is not a UcodeResponsePacket and it is a STATUS packet,
+    prints its status code and contained text before raising an exception.
     """
     pkt = ApplyUcodePacket(target_slot=apply_slot, apply_known_good=apply_known_good)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -69,6 +73,8 @@ def send_apply_ucode(host, port, apply_slot, apply_known_good):
         sock.sendall(pkt.pack())
         response = Packet.read_from_socket(sock)
     if not isinstance(response, UcodeResponsePacket):
+        if isinstance(response, StatusPacket):
+            print(f"APPLYUCODE STATUS response: code {response.status_code}, text: {response.text}")
         raise Exception("APPLYUCODE did not return UCODERESPONSE")
     return response
 
@@ -154,8 +160,7 @@ def main():
     test_count = 0
     start_time = time.time()
 
-    # Assume the ucode update is already loaded in the flipbits slot.
-    # Main test loop.
+    # The ucode update is assumed to be already loaded in the flipbits slot.
     if args.mode == "single":
         for pos in range(current_index, bit_end):
             test_count += 1
