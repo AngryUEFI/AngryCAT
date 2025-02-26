@@ -8,6 +8,7 @@ class PacketType(Enum):
     PING         = 0x1
     MULTIPING    = 0x2
     GETMSGSIZE   = 0x3
+    REBOOT       = 0x21
     SENDUCODE    = 0x101
     FLIPBITS     = 0x121
     APPLYUCODE   = 0x141
@@ -375,6 +376,37 @@ class MsrResponsePacket(Packet):
     def __repr__(self):
         return f"MsrResponsePacket(eax={self.eax}, edx={self.edx}, control={self.control})"
 
+class RebootPacket(Packet):
+    message_type = PacketType.REBOOT
+
+    def __init__(self, *, payload: bytes = None, warm: bool = False):
+        """
+        If payload is provided, parse the 4-byte options.
+        Otherwise, use the provided 'warm' flag.
+        """
+        if payload is not None:
+            # The payload is a 4-byte unsigned little-endian integer.
+            options, = struct.unpack("<I", payload[:4])
+            # The lowest byte holds the flags; bit 0 indicates warm reboot.
+            self.warm = bool(options & 0x1)
+        else:
+            self.warm = warm
+
+    def pack(self) -> bytes:
+        # Build the payload: 4-byte LE unsigned integer.
+        # Upper 3 bytes are unused (0); lower byte: bit 0 set if warm reboot is desired.
+        flags = 1 if self.warm else 0
+        payload = struct.pack("<I", flags)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,  # payload + (metadata+msg_type)
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"RebootPacket(warm={self.warm}, control={self.control})"
+
+
 # ======== Packet Parser ========
 
 def parse_packet(data: bytes) -> Packet:
@@ -410,6 +442,8 @@ def parse_packet(data: bytes) -> Packet:
         pkt = ApplyUcodePacket(payload=payload)
     elif msg_type == PacketType.READMSR.value:
         pkt = ReadMsrPacket(payload=payload)
+    elif msg_type == PacketType.REBOOT.value:
+        pkt = RebootPacket(payload=payload)
     elif msg_type == PacketType.STATUS.value:
         pkt = StatusPacket(payload=payload)
     elif msg_type == PacketType.PONG.value:

@@ -10,6 +10,7 @@ from protocol import (
     FlipBitsPacket,
     ApplyUcodePacket,
     ReadMsrPacket,
+    RebootPacket,
     Packet,
     StatusPacket,
     PongPacket,
@@ -30,12 +31,13 @@ def main():
     )
     parser.add_argument("--host", type=str, default="127.0.0.1", help="AngryUEFI host")
     parser.add_argument("--port", type=int, default=3239, help="AngryUEFI port")
-    parser.add_argument("--type", type=str, required=True, choices=["PING", "SENDUCODE", "FLIPBITS", "APPLYUCODE", "READMSR"],
+    parser.add_argument("--type", type=str, required=True,
+                        choices=["PING", "SENDUCODE", "FLIPBITS", "APPLYUCODE", "READMSR", "REBOOT"],
                         help="Type of packet to send")
     # Arguments for PING
     parser.add_argument("--message", type=str, help="Message to send for PING")
     # Arguments for SENDUCODE
-    parser.add_argument("--target-slot", type=int, help="Target slot for SENDUCODE (and also for APPLYUCODE if applicable)")
+    parser.add_argument("--target-slot", type=int, help="Target slot for SENDUCODE (or APPLYUCODE) commands")
     parser.add_argument("--file", type=str, help="Path to the update file for SENDUCODE")
     # Arguments for FLIPBITS
     parser.add_argument("--positions", type=str, help="Comma-separated bit positions for FLIPBITS")
@@ -43,6 +45,8 @@ def main():
     parser.add_argument("--apply-known-good", action="store_true", help="If present, apply known good update after test update")
     # Arguments for READMSR
     parser.add_argument("--msr", type=str, help="MSR in hex to read for READMSR (e.g. 0x10)")
+    # Arguments for REBOOT
+    parser.add_argument("--reboot-warm", action="store_true", help="If present, perform a warm reboot (otherwise cold)")
     
     args = parser.parse_args()
     
@@ -64,7 +68,7 @@ def main():
                 print("For SENDUCODE, --target-slot and --file are required.")
                 sys.exit(1)
             if not os.path.exists(args.file):
-                print("File {} does not exist.".format(args.file))
+                print(f"File {args.file} does not exist.")
                 sys.exit(1)
             with open(args.file, "rb") as f:
                 update_bytes = f.read()
@@ -74,7 +78,6 @@ def main():
                 print("For FLIPBITS, --target-slot and --positions are required.")
                 sys.exit(1)
             try:
-                # Parse comma-separated positions into a list of ints.
                 positions = [int(x.strip()) for x in args.positions.split(",")]
             except Exception:
                 print("Error parsing --positions. They must be comma-separated integers.")
@@ -84,7 +87,6 @@ def main():
             if args.target_slot is None:
                 print("For APPLYUCODE, --target-slot is required.")
                 sys.exit(1)
-            # Use the --apply-known-good flag (defaults to False if not provided)
             packet = ApplyUcodePacket(target_slot=args.target_slot, apply_known_good=args.apply_known_good)
         elif cmd_type == "READMSR":
             if not args.msr:
@@ -96,22 +98,23 @@ def main():
                 print("Invalid MSR value. Use hex (e.g., 0x10).")
                 sys.exit(1)
             packet = ReadMsrPacket(target_msr=msr_val)
+        elif cmd_type == "REBOOT":
+            # For REBOOT, use the --reboot-warm flag (default is cold reboot).
+            packet = RebootPacket(warm=args.reboot_warm)
         else:
             print("Unsupported packet type.")
             sys.exit(1)
     except Exception as e:
         print("Error creating packet:", e)
         sys.exit(1)
-
+    
     try:
         response = send_packet(packet, host, port)
     except Exception as e:
         print("Error sending packet:", e)
         sys.exit(1)
-
-    # Now print out the response in a human-readable form.
+    
     print("Response received:")
-    # If it's a STATUS packet, print status code and text.
     if isinstance(response, StatusPacket):
         print("Type: STATUS")
         print("Status Code:", response.status_code)

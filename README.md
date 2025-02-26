@@ -78,6 +78,20 @@ These messages are sent from AngryCAT to AngryUEFI.
 * 4 Byte unsigned LE message length
 * Length Bytes message
 
+## REBOOT
+* ID: 0x21
+* Reboots the system
+* Optionally perform a "warm reboot"
+    * UEFI spec offers both warm and cold reboots
+    * difference is not fully documented and likely hardware specific
+* Returns a STATUS response before rebooting
+
+### Structure
+* 4 Byte unsigned LE options
+    * 3 Byte unused
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - perform a warm reboot instead of a cold reboot
+
 ## SENDUCODE
 * ID: 0x101
 * Places a ucode update in the specified slot
