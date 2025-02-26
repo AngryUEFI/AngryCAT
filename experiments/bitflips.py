@@ -138,18 +138,10 @@ def save_resume(resume_file, data):
     with open(resume_file, "w") as f:
         json.dump(data, f)
 
+# New: Append a JSON object to file, each on its own line.
 def append_result(results_file, entry):
-    if os.path.exists(results_file):
-        with open(results_file, "r") as f:
-            try:
-                results = json.load(f)
-            except Exception:
-                results = []
-    else:
-        results = []
-    results.append(entry)
-    with open(results_file, "w") as f:
-        json.dump(results, f, indent=2)
+    with open(results_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Bit Flip Tests for Ucode Update")
@@ -203,7 +195,6 @@ def main():
     last_rdtsc = 0
     start_time = time.time()
 
-    # Establish a persistent connection.
     pconn = PersistentConnection(args.host, args.port, max_retries=5)
 
     if args.mode == "single":
@@ -213,7 +204,7 @@ def main():
                                                             pos, args.pubmod_threshold, args.unknown_threshold)
             if state is not None:
                 last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
-            # Log result to all results file unconditionally.
+            # Append every result to the all results file.
             all_entry = {
                 "mode": "single",
                 "bit_positions": [pos],
@@ -222,7 +213,7 @@ def main():
                 "error": error_msg
             }
             append_result(args.all_results_file, all_entry)
-            # For the normal results file, log only if it's a reject.
+            # Append to the main results file if it's a reject.
             if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
                 entry = {
                     "mode": "single",
@@ -238,10 +229,6 @@ def main():
                     found_unknown += 1
                 elif state == RejectState.CONNECTION_ERROR:
                     found_conn_error += 1
-            else:
-                # For other states (e.g. PUBMOD_REJECT), we don't count them in the reject stats.
-                pass
-
             if test_count % 10 == 0:
                 save_resume(args.resume_file, {"mode": "single", "current_index": pos})
             elapsed = time.time() - start_time
