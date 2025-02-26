@@ -158,6 +158,7 @@ def main():
     found_signature = 0
     found_unknown = 0
     test_count = 0
+    last_rdtsc = 0
     start_time = time.time()
 
     # The ucode update is assumed to be already loaded in the flipbits slot.
@@ -168,6 +169,7 @@ def main():
                 send_flipbits(args.host, args.port, args.flipbits_slot, [pos])
                 apply_resp = send_apply_ucode(args.host, args.port, args.apply_slot, apply_known_good=False)
                 rdtsc_diff = apply_resp.rdtsc_diff
+                last_rdtsc = rdtsc_diff
                 state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
                 if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT]:
                     entry = {
@@ -190,7 +192,8 @@ def main():
                 save_resume(args.resume_file, {"mode": "single", "current_index": pos})
             elapsed = time.time() - start_time
             sys.stdout.write(f"[SINGLE] {test_count}/{total_tests} tests; current bit: {pos}; "
-                             f"Elapsed: {elapsed:.2f}s; SignatureReject: {found_signature}, UnknownReject: {found_unknown}    \r")
+                             f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
+                             f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}    \r")
             sys.stdout.flush()
     else:
         for i in range(current_i, bit_end):
@@ -201,6 +204,7 @@ def main():
                     send_flipbits(args.host, args.port, args.flipbits_slot, [i, j])
                     apply_resp = send_apply_ucode(args.host, args.port, args.apply_slot, apply_known_good=False)
                     rdtsc_diff = apply_resp.rdtsc_diff
+                    last_rdtsc = rdtsc_diff
                     state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
                     if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT]:
                         entry = {
@@ -224,7 +228,8 @@ def main():
                     save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
                 elapsed = time.time() - start_time
                 sys.stdout.write(f"[DOUBLE] {test_count}/{total_tests} tests; current pair: ({i}, {j}); "
-                                 f"Elapsed: {elapsed:.2f}s; SignatureReject: {found_signature}, UnknownReject: {found_unknown}    \r")
+                                 f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
+                                 f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}    \r")
                 sys.stdout.flush()
 
     # Final resume update.
@@ -233,7 +238,8 @@ def main():
     else:
         save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
     total_elapsed = time.time() - start_time
-    sys.stdout.write(f"\nCompleted {test_count} tests in {total_elapsed:.2f}s. SignatureReject: {found_signature}, UnknownReject: {found_unknown}.\n")
+    sys.stdout.write(f"\nCompleted {test_count} tests in {total_elapsed:.2f}s. "
+                     f"SignatureReject: {found_signature}, UnknownReject: {found_unknown}.\n")
     sys.stdout.flush()
 
 if __name__ == "__main__":
