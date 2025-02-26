@@ -28,7 +28,7 @@ class RejectState(Enum):
     CONNECTION_ERROR = 4
 
 # Configurable thresholds.
-DEFAULT_PUBMOD_THRESHOLD = 30000
+DEFAULT_PUBMOD_THRESHOLD = 24300
 DEFAULT_UNKNOWN_THRESHOLD = 100000
 
 def classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold):
