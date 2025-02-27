@@ -5,7 +5,6 @@ import os
 import sys
 import time
 import socket
-from enum import Enum
 
 # Add parent directory to sys.path so that protocol can be imported.
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -22,24 +21,68 @@ from protocol import (
     Packet,
 )
 
-# Define an enum for reject states.
-class RejectState(Enum):
-    PUBMOD_REJECT = 1
-    UNKNOWN_REJECT = 2
-    SIGNATURE_REJECT = 3
-    CONNECTION_ERROR = 4
+#############################
+# New retry logic functions #
+#############################
 
-# Configurable thresholds.
-DEFAULT_PUBMOD_THRESHOLD = 30000
-DEFAULT_UNKNOWN_THRESHOLD = 100000
+def run_single_test_with_retry(pconn, flip_slot, apply_slot, pos, retry_threshold, max_retry):
+    """
+    Run a single test for bit 'pos' with retries.
+    If retry_threshold > 0 and the returned rdtsc_diff is above that threshold, then retry.
+    Returns a tuple:
+      (final_rdtsc_diff, rejected_rdtsc_diffs, current_test_retry_count)
+    If the test is retried, the rejected_rdtsc_diffs list holds all rdtsc_diff values that exceeded the threshold.
+    If the retry limit is reached, the smallest of the attempted rdtsc_diff values is used.
+    """
+    attempt = 0
+    rejected = []
+    attempted_values = []
+    while attempt < max_retry:
+        attempt += 1
+        try:
+            send_flipbits(pconn, flip_slot, [pos])
+            apply_resp = send_apply_ucode(pconn, apply_slot, apply_known_good=False)
+            rdtsc = apply_resp.rdtsc_diff
+        except Exception as e:
+            # On error, treat it as a very high value so that it will be rejected.
+            rdtsc = float('inf')
+        attempted_values.append(rdtsc)
+        # If no retry threshold is set (0) or rdtsc is at or below threshold, accept this value.
+        if retry_threshold == 0 or rdtsc <= retry_threshold:
+            return rdtsc, rejected, attempt
+        else:
+            rejected.append(rdtsc)
+            # Retry without sleeping.
+    # If reached max_retry without any value <= threshold, choose the smallest value.
+    final_val = min(attempted_values) if attempted_values else None
+    return final_val, rejected, attempt
 
-def classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold):
-    if rdtsc_diff < pub_threshold:
-        return RejectState.PUBMOD_REJECT
-    elif rdtsc_diff < unknown_threshold:
-        return RejectState.UNKNOWN_REJECT
-    else:
-        return RejectState.SIGNATURE_REJECT
+def run_double_test_with_retry(pconn, flip_slot, apply_slot, i, j, retry_threshold, max_retry):
+    """
+    Similar to run_single_test_with_retry but for a pair (i,j).
+    """
+    attempt = 0
+    rejected = []
+    attempted_values = []
+    while attempt < max_retry:
+        attempt += 1
+        try:
+            send_flipbits(pconn, flip_slot, [i, j])
+            apply_resp = send_apply_ucode(pconn, apply_slot, apply_known_good=False)
+            rdtsc = apply_resp.rdtsc_diff
+        except Exception as e:
+            rdtsc = float('inf')
+        attempted_values.append(rdtsc)
+        if retry_threshold == 0 or rdtsc <= retry_threshold:
+            return rdtsc, rejected, attempt
+        else:
+            rejected.append(rdtsc)
+    final_val = min(attempted_values) if attempted_values else None
+    return final_val, rejected, attempt
+
+###########################
+# Persistent Connection   #
+###########################
 
 class PersistentConnection:
     def __init__(self, host, port, max_retries=5):
@@ -56,7 +99,7 @@ class PersistentConnection:
             except Exception:
                 pass
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(1)
+        self.sock.settimeout(1)  # Reduced timeout to 1 second.
         self.sock.connect((self.host, self.port))
 
     def send_packet(self, packet_bytes):
@@ -72,8 +115,12 @@ class PersistentConnection:
                     self.connect()
                 except Exception:
                     pass
-                time.sleep(1)
+                time.sleep(0.5)
         raise Exception(f"Failed to send packet after {self.max_retries} retries: {last_error}")
+
+###########################
+# Packet send functions   #
+###########################
 
 def send_flipbits(pconn, flip_slot, flip_positions):
     pkt = FlipBitsPacket(source_slot=flip_slot, flips=flip_positions)
@@ -123,36 +170,183 @@ def wait_for_reboot(host, port, ping_message="ping", retry_interval=1):
             print("System not up yet, retrying in", retry_interval, "seconds...")
             time.sleep(retry_interval)
 
-def run_single_test(pconn, flip_slot, apply_slot, pos, pub_threshold, unknown_threshold):
-    retries = 0
-    last_error = ""
-    while retries < 5:
-        try:
-            send_flipbits(pconn, flip_slot, [pos])
-            apply_resp = send_apply_ucode(pconn, apply_slot, apply_known_good=False)
-            rdtsc_diff = apply_resp.rdtsc_diff
-            state = classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold)
-            return rdtsc_diff, state, None
-        except Exception as e:
-            last_error = str(e)
-            retries += 1
-            # No sleep here
-    return None, RejectState.CONNECTION_ERROR, f"Connection error after 5 retries: {last_error}"
+##################################
+# Mode-specific test functions   #
+##################################
 
-def run_double_test(pconn, flip_slot, apply_slot, i, j, pub_threshold, unknown_threshold):
-    retries = 0
-    last_error = ""
-    while retries < 5:
-        try:
-            send_flipbits(pconn, flip_slot, [i, j])
-            apply_resp = send_apply_ucode(pconn, apply_slot, apply_known_good=False)
-            rdtsc_diff = apply_resp.rdtsc_diff
-            state = classify_rdtsc(rdtsc_diff, pub_threshold, unknown_threshold)
-            return rdtsc_diff, state, None
-        except Exception as e:
-            last_error = str(e)
-            retries += 1
-    return None, RejectState.CONNECTION_ERROR, f"Connection error after 5 retries: {last_error}"
+def run_single_mode(pconn, args, resume_state):
+    # Resume state: absolute_test_count, runtime, total_retry_count, current_index
+    current_index = resume_state.get("current_index", args.bit_start) if resume_state else args.bit_start
+    absolute_test_count = resume_state.get("absolute_test_count", 0) if resume_state else 0
+    total_retry_overall = resume_state.get("total_retry_count", 0) if resume_state else 0
+
+    tests_since_reboot = 0
+    total_tests = (args.bit_end if args.bit_end is not None else args.update_size*8) - args.bit_start
+
+    for pos in range(current_index, (args.bit_end if args.bit_end is not None else args.update_size*8)):
+        absolute_test_count += 1
+        tests_since_reboot += 1
+        final_rdtsc, rejected_vals, current_test_retries = run_single_test_with_retry(
+            pconn, args.flipbits_slot, args.apply_slot, pos, args.retry_threshold, args.max_retry
+        )
+        total_retry_overall += current_test_retries - 1  # first attempt is not a retry
+        result = {
+            "mode": "single",
+            "bit_positions": [pos],
+            "rdtsc_diff": final_rdtsc,
+            "rejected_rdtsc_diffs": rejected_vals,
+            "tests_since_reboot": tests_since_reboot,
+            "current_test_retry_count": current_test_retries,
+            "absolute_test_count": absolute_test_count,
+            "runtime": time.time() - start_time,
+            "total_retry_count": total_retry_overall
+        }
+        append_result(args.all_results_file, result)
+        if args.resume_interval and absolute_test_count % args.resume_interval == 0:
+            save_resume(args.resume_file, {
+                "mode": "single",
+                "current_index": pos,
+                "absolute_test_count": absolute_test_count,
+                "runtime": time.time() - start_time,
+                "total_retry_count": total_retry_overall
+            })
+        status_line = (f"[SINGLE] {absolute_test_count}/{total_tests} tests; current bit: {pos}; "
+                       f"Last rdtsc: {final_rdtsc}; Elapsed: {time.time()-start_time:.2f}s; "
+                       f"Retries (overall): {total_retry_overall}, current test retries: {current_test_retries}, "
+                       f"Tests since reboot: {tests_since_reboot}")
+        sys.stdout.write(status_line + "    \r")
+        sys.stdout.flush()
+        if absolute_test_count % args.reboot_interval == 0:
+            sys.stdout.write("\nTriggering reboot...\n")
+            sys.stdout.flush()
+            send_reboot(pconn, warm=False)
+            wait_for_reboot(args.host, args.port)
+            pconn.connect()
+            tests_since_reboot = 0
+
+    return absolute_test_count, total_retry_overall
+
+def run_double_mode(pconn, args, resume_state):
+    if resume_state:
+        current_i = resume_state.get("current_i", args.bit_start)
+        current_j = resume_state.get("current_j", args.bit_start + 1)
+        absolute_test_count = resume_state.get("absolute_test_count", 0)
+        total_retry_overall = resume_state.get("total_retry_count", 0)
+    else:
+        current_i, current_j = args.bit_start, args.bit_start + 1
+        absolute_test_count = 0
+        total_retry_overall = 0
+
+    tests_since_reboot = 0
+    bit_end = args.bit_end if args.bit_end is not None else args.update_size*8
+    n = bit_end - args.bit_start
+    total_tests = n * (n - 1) // 2
+
+    for i in range(current_i, bit_end):
+        for j in range((current_j if i==current_i else i+1), bit_end):
+            absolute_test_count += 1
+            tests_since_reboot += 1
+            final_rdtsc, rejected_vals, current_test_retries = run_double_test_with_retry(
+                pconn, args.flipbits_slot, args.apply_slot, i, j, args.retry_threshold, args.max_retry
+            )
+            total_retry_overall += current_test_retries - 1
+            result = {
+                "mode": "double",
+                "bit_positions": [i, j],
+                "rdtsc_diff": final_rdtsc,
+                "rejected_rdtsc_diffs": rejected_vals,
+                "tests_since_reboot": tests_since_reboot,
+                "current_test_retry_count": current_test_retries,
+                "absolute_test_count": absolute_test_count,
+                "runtime": time.time() - start_time,
+                "total_retry_count": total_retry_overall
+            }
+            append_result(args.all_results_file, result)
+            if args.resume_interval and absolute_test_count % args.resume_interval == 0:
+                save_resume(args.resume_file, {
+                    "mode": "double",
+                    "current_i": i,
+                    "current_j": j,
+                    "absolute_test_count": absolute_test_count,
+                    "runtime": time.time() - start_time,
+                    "total_retry_count": total_retry_overall
+                })
+            status_line = (f"[DOUBLE] {absolute_test_count}/{total_tests} tests; current pair: ({i}, {j}); "
+                           f"Last rdtsc: {final_rdtsc}; Elapsed: {time.time()-start_time:.2f}s; "
+                           f"Retries (overall): {total_retry_overall}, current test retries: {current_test_retries}, "
+                           f"Tests since reboot: {tests_since_reboot}")
+            sys.stdout.write(status_line + "    \r")
+            sys.stdout.flush()
+            if absolute_test_count % args.reboot_interval == 0:
+                sys.stdout.write("\nTriggering reboot...\n")
+                sys.stdout.flush()
+                send_reboot(pconn, warm=False)
+                wait_for_reboot(args.host, args.port)
+                pconn.connect()
+                tests_since_reboot = 0
+    return absolute_test_count, total_retry_overall
+
+def run_multi_region_double_mode(pconn, args, resume_state):
+    if resume_state:
+        current_r1 = resume_state.get("region1_current", args.region1_start)
+        current_r2 = resume_state.get("region2_current", args.region2_start)
+        absolute_test_count = resume_state.get("absolute_test_count", 0)
+        total_retry_overall = resume_state.get("total_retry_count", 0)
+    else:
+        current_r1, current_r2 = args.region1_start, args.region2_start
+        absolute_test_count = 0
+        total_retry_overall = 0
+
+    tests_since_reboot = 0
+    total_tests = (args.region1_end - args.region1_start) * (args.region2_end - args.region2_start)
+
+    for r1 in range(current_r1, args.region1_end):
+        for r2 in range(current_r2, args.region2_end):
+            absolute_test_count += 1
+            tests_since_reboot += 1
+            final_rdtsc, rejected_vals, current_test_retries = run_double_test_with_retry(
+                pconn, args.flipbits_slot, args.apply_slot, r1, r2, args.retry_threshold, args.max_retry
+            )
+            total_retry_overall += current_test_retries - 1
+            result = {
+                "mode": "multi_region_double",
+                "bit_positions": [r1, r2],
+                "rdtsc_diff": final_rdtsc,
+                "rejected_rdtsc_diffs": rejected_vals,
+                "tests_since_reboot": tests_since_reboot,
+                "current_test_retry_count": current_test_retries,
+                "absolute_test_count": absolute_test_count,
+                "runtime": time.time() - start_time,
+                "total_retry_count": total_retry_overall
+            }
+            append_result(args.all_results_file, result)
+            if args.resume_interval and absolute_test_count % args.resume_interval == 0:
+                save_resume(args.resume_file, {
+                    "mode": "multi_region_double",
+                    "region1_current": r1,
+                    "region2_current": r2,
+                    "absolute_test_count": absolute_test_count,
+                    "runtime": time.time() - start_time,
+                    "total_retry_count": total_retry_overall
+                })
+            status_line = (f"[MULTI] {absolute_test_count}/{total_tests} tests; current regions: ({r1}, {r2}); "
+                           f"Last rdtsc: {final_rdtsc}; Elapsed: {time.time()-start_time:.2f}s; "
+                           f"Retries (overall): {total_retry_overall}, current test retries: {current_test_retries}, "
+                           f"Tests since reboot: {tests_since_reboot}")
+            sys.stdout.write(status_line + "    \r")
+            sys.stdout.flush()
+            if absolute_test_count % args.reboot_interval == 0:
+                sys.stdout.write("\nTriggering reboot...\n")
+                sys.stdout.flush()
+                send_reboot(pconn, warm=False)
+                wait_for_reboot(args.host, args.port)
+                pconn.connect()
+                tests_since_reboot = 0
+    return absolute_test_count, total_retry_overall
+
+############################
+# Resume file functions    #
+############################
 
 def load_resume(resume_file, mode):
     if os.path.exists(resume_file):
@@ -163,23 +357,27 @@ def load_resume(resume_file, mode):
                     return data
             except Exception:
                 pass
-    return None
+    return {}
 
 def save_resume(resume_file, data):
     with open(resume_file, "w") as f:
         json.dump(data, f)
 
-# Append a JSON object to a file (each on its own line).
 def append_result(results_file, entry):
     with open(results_file, "a") as f:
         f.write(json.dumps(entry) + ",\n")
 
-def main():
+############################
+# Main test driver         #
+############################
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bit Flip Tests for Ucode Update")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="AngryUEFI host")
     parser.add_argument("--port", type=int, default=3239, help="AngryUEFI port")
-    parser.add_argument("--mode", type=str, choices=["single", "double", "multi_region_double"], default="single",
-                        help="Test mode: single-bit flip, two-bit flip, or multi_region_double")
+    parser.add_argument("--mode", type=str, required=True,
+                        choices=["single", "double", "multi_region_double"],
+                        help="Test mode: 'single', 'double', or 'multi_region_double'")
     parser.add_argument("--flipbits-slot", type=int, default=0, help="Target slot for FLIPBITS command")
     parser.add_argument("--apply-slot", type=int, default=0, help="Target slot for APPLYUCODE command")
     parser.add_argument("--update-size", type=int, default=3200, help="Ucode update size in bytes")
@@ -192,15 +390,18 @@ def main():
     parser.add_argument("--region2-start", type=int, default=0, help="Start bit position for region 2")
     parser.add_argument("--region2-end", type=int, default=None, help="End bit position for region 2")
     parser.add_argument("--reboot-interval", type=int, default=5000,
-                        help="Trigger a cold reboot every this many iterations (default 5000)")
+                        help="Trigger a cold reboot every this many iterations (default 5000; retries not counted)")
     parser.add_argument("--resume-file", type=str, default="resume.json", help="File for resume state")
     parser.add_argument("--all-results-file", type=str, default="all_results.json", help="File for all test results")
-    parser.add_argument("--pubmod-threshold", type=int, default=DEFAULT_PUBMOD_THRESHOLD,
-                        help="Threshold for PubModReject")
-    parser.add_argument("--unknown-threshold", type=int, default=DEFAULT_UNKNOWN_THRESHOLD,
-                        help="Threshold for UnknownReject")
+    parser.add_argument("--retry-threshold", type=int, default=0,
+                        help="If nonzero, if rdtsc_diff > threshold, retry the test (default 0: do not retry)")
+    parser.add_argument("--max-retry", type=int, default=5,
+                        help="Maximum number of retries per test (default 5)")
+    parser.add_argument("--resume-interval", type=int, default=1,
+                        help="Write out resume state every this many tests (default 1, i.e. every test)")
     args = parser.parse_args()
 
+    # Determine total_bits from update size.
     total_bits = args.update_size * 8
     if args.mode in ["single", "double"]:
         bit_end = args.bit_end if args.bit_end is not None else total_bits
@@ -210,167 +411,66 @@ def main():
         region1_end = args.region1_end if args.region1_end is not None else total_bits
         region2_end = args.region2_end if args.region2_end is not None else total_bits
 
+    # Determine total tests.
     if args.mode == "single":
-        total_tests = (bit_end - args.bit_start)
+        total_tests = bit_end - args.bit_start
     elif args.mode == "double":
         n = bit_end - args.bit_start
         total_tests = n * (n - 1) // 2
-    else:  # multi_region_double
+    elif args.mode == "multi_region_double":
         total_tests = (args.region1_end - args.region1_start) * (args.region2_end - args.region2_start)
+    else:
+        print("Invalid mode.")
+        sys.exit(1)
 
+    # Load resume state.
     if args.mode == "single":
         resume_state = load_resume(args.resume_file, "single")
-        current_index = resume_state.get("current_index", args.bit_start) if resume_state else args.bit_start
+        current_index = resume_state.get("current_index", args.bit_start)
     elif args.mode == "double":
         resume_state = load_resume(args.resume_file, "double")
-        if resume_state:
-            current_i = resume_state.get("current_i", args.bit_start)
-            current_j = resume_state.get("current_j", args.bit_start + 1)
-        else:
-            current_i, current_j = args.bit_start, args.bit_start + 1
-    else:
+        current_i = resume_state.get("current_i", args.bit_start)
+        current_j = resume_state.get("current_j", args.bit_start + 1)
+    elif args.mode == "multi_region_double":
         resume_state = load_resume(args.resume_file, "multi_region_double")
-        if resume_state:
-            current_r1 = resume_state.get("region1_current", args.region1_start)
-            current_r2 = resume_state.get("region2_current", args.region2_start)
-        else:
-            current_r1, current_r2 = args.region1_start, args.region2_start
+        current_r1 = resume_state.get("region1_current", args.region1_start)
+        current_r2 = resume_state.get("region2_current", args.region2_start)
+    else:
+        print("Invalid mode specified.")
+        sys.exit(1)
 
-    found_signature = 0
-    found_unknown = 0
-    found_conn_error = 0
-    test_count = 0
-    last_rdtsc = 0
+    absolute_test_count = resume_state.get("absolute_test_count", 0) if resume_state else 0
+    total_retry_overall = resume_state.get("total_retry_count", 0) if resume_state else 0
+
+    tests_since_reboot = 0
+    global start_time
     start_time = time.time()
 
+    # Establish persistent connection.
     pconn = PersistentConnection(args.host, args.port, max_retries=5)
 
+    # Choose mode explicitly.
     if args.mode == "single":
-        for pos in range(current_index, bit_end):
-            test_count += 1
-            rdtsc_diff, state, error_msg = run_single_test(pconn, args.flipbits_slot, args.apply_slot,
-                                                            pos, args.pubmod_threshold, args.unknown_threshold)
-            if state is not None:
-                last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
-            all_entry = {
-                "mode": "single",
-                "bit_positions": [pos],
-                "rdtsc_diff": rdtsc_diff,
-                "state": state.name if state is not None else "UNKNOWN_ERROR",
-                "error": error_msg
-            }
-            append_result(args.all_results_file, all_entry)
-            if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
-                if state == RejectState.SIGNATURE_REJECT:
-                    found_signature += 1
-                elif state == RejectState.UNKNOWN_REJECT:
-                    found_unknown += 1
-                elif state == RejectState.CONNECTION_ERROR:
-                    found_conn_error += 1
-            if test_count % 10 == 0:
-                save_resume(args.resume_file, {"mode": "single", "current_index": pos})
-            elapsed = time.time() - start_time
-            sys.stdout.write(f"[SINGLE] {test_count}/{total_tests} tests; current bit: {pos}; "
-                             f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
-                             f"SigReject: {found_signature}, UnkReject: {found_unknown}, ConnErr: {found_conn_error}    \r")
-            sys.stdout.flush()
-            if test_count % args.reboot_interval == 0:
-                sys.stdout.write("\nTriggering reboot...\n")
-                sys.stdout.flush()
-                send_reboot(pconn, warm=False)
-                wait_for_reboot(args.host, args.port)
-                pconn.connect()
+        absolute_test_count, total_retry_overall = run_single_mode(pconn, args, resume_state)
     elif args.mode == "double":
-        for i in range(current_i, bit_end):
-            j_start = current_j if i == current_i else i + 1
-            for j in range(j_start, bit_end):
-                test_count += 1
-                rdtsc_diff, state, error_msg = run_double_test(pconn, args.flipbits_slot, args.apply_slot,
-                                                               i, j, args.pubmod_threshold, args.unknown_threshold)
-                if state is not None:
-                    last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
-                all_entry = {
-                    "mode": "double",
-                    "bit_positions": [i, j],
-                    "rdtsc_diff": rdtsc_diff,
-                    "state": state.name if state is not None else "UNKNOWN_ERROR",
-                    "error": error_msg
-                }
-                append_result(args.all_results_file, all_entry)
-                if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
-                    if state == RejectState.SIGNATURE_REJECT:
-                        found_signature += 1
-                    elif state == RejectState.UNKNOWN_REJECT:
-                        found_unknown += 1
-                    elif state == RejectState.CONNECTION_ERROR:
-                        found_conn_error += 1
-                if test_count % 10 == 0:
-                    save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
-                elapsed = time.time() - start_time
-                sys.stdout.write(f"[DOUBLE] {test_count}/{total_tests} tests; current pair: ({i}, {j}); "
-                                 f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
-                                 f"SigReject: {found_signature}, UnkReject: {found_unknown}, ConnErr: {found_conn_error}    \r")
-                sys.stdout.flush()
-                if test_count % args.reboot_interval == 0:
-                    sys.stdout.write("\nTriggering reboot...\n")
-                    sys.stdout.flush()
-                    send_reboot(pconn, warm=False)
-                    wait_for_reboot(args.host, args.port)
-                    pconn.connect()
-    else:  # multi_region_double
-        for r1 in range(current_r1, args.region1_end):
-            for r2 in range(current_r2, args.region2_end):
-                test_count += 1
-                try:
-                    send_flipbits(pconn, args.flipbits_slot, [r1, r2])
-                    apply_resp = send_apply_ucode(pconn, args.apply_slot, apply_known_good=False)
-                    rdtsc_diff = apply_resp.rdtsc_diff
-                    state = classify_rdtsc(rdtsc_diff, args.pubmod_threshold, args.unknown_threshold)
-                except Exception as e:
-                    rdtsc_diff, state, error_msg = None, RejectState.CONNECTION_ERROR, str(e)
-                else:
-                    error_msg = None
-                if state is not None:
-                    last_rdtsc = rdtsc_diff if rdtsc_diff is not None else last_rdtsc
-                all_entry = {
-                    "mode": "multi_region_double",
-                    "bit_positions": [r1, r2],
-                    "rdtsc_diff": rdtsc_diff,
-                    "state": state.name if state is not None else "UNKNOWN_ERROR",
-                    "error": error_msg
-                }
-                append_result(args.all_results_file, all_entry)
-                if state in [RejectState.UNKNOWN_REJECT, RejectState.SIGNATURE_REJECT, RejectState.CONNECTION_ERROR]:
-                    if state == RejectState.SIGNATURE_REJECT:
-                        found_signature += 1
-                    elif state == RejectState.UNKNOWN_REJECT:
-                        found_unknown += 1
-                    elif state == RejectState.CONNECTION_ERROR:
-                        found_conn_error += 1
-                if test_count % 10 == 0:
-                    save_resume(args.resume_file, {"mode": "multi_region_double", "region1_current": r1, "region2_current": r2})
-                elapsed = time.time() - start_time
-                sys.stdout.write(f"[MULTI] {test_count}/{total_tests} tests; current regions: ({r1}, {r2}); "
-                                 f"Last rdtsc: {last_rdtsc}; Elapsed: {elapsed:.2f}s; "
-                                 f"SigReject: {found_signature}, UnkReject: {found_unknown}, ConnErr: {found_conn_error}    \r")
-                sys.stdout.flush()
-                if test_count % args.reboot_interval == 0:
-                    sys.stdout.write("\nTriggering reboot...\n")
-                    sys.stdout.flush()
-                    send_reboot(pconn, warm=False)
-                    wait_for_reboot(args.host, args.port)
-                    pconn.connect()
-
-    if args.mode == "single":
-        save_resume(args.resume_file, {"mode": "single", "current_index": pos})
-    elif args.mode == "double":
-        save_resume(args.resume_file, {"mode": "double", "current_i": i, "current_j": j})
+        absolute_test_count, total_retry_overall = run_double_mode(pconn, args, resume_state)
+    elif args.mode == "multi_region_double":
+        absolute_test_count, total_retry_overall = run_multi_region_double_mode(pconn, args, resume_state)
     else:
-        save_resume(args.resume_file, {"mode": "multi_region_double", "region1_current": r1, "region2_current": r2})
-    total_elapsed = time.time() - start_time
-    sys.stdout.write(f"\nCompleted {test_count} tests in {total_elapsed:.2f}s. "
-                     f"SigReject: {found_signature}, UnkReject: {found_unknown}, ConnErr: {found_conn_error}.\n")
-    sys.stdout.flush()
+        print("Invalid mode specified.")
+        sys.exit(1)
 
-if __name__ == "__main__":
-    main()
+    # Save final resume state.
+    if args.mode == "single":
+        save_resume(args.resume_file, {"mode": "single", "current_index": args.bit_end, "absolute_test_count": absolute_test_count,
+                                      "runtime": time.time()-start_time, "total_retry_count": total_retry_overall})
+    elif args.mode == "double":
+        save_resume(args.resume_file, {"mode": "double", "current_i": args.bit_end-1, "current_j": args.bit_end, "absolute_test_count": absolute_test_count,
+                                      "runtime": time.time()-start_time, "total_retry_count": total_retry_overall})
+    else:
+        save_resume(args.resume_file, {"mode": "multi_region_double", "region1_current": args.region1_end, "region2_current": args.region2_end,
+                                      "absolute_test_count": absolute_test_count, "runtime": time.time()-start_time,
+                                      "total_retry_count": total_retry_overall})
+    total_elapsed = time.time() - start_time
+    sys.stdout.write(f"\nCompleted {absolute_test_count} tests in {total_elapsed:.2f}s. Total retries: {total_retry_overall}\n")
+    sys.stdout.flush()
