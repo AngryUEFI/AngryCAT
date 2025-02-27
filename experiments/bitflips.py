@@ -340,11 +340,13 @@ def run_multi_region_double_mode(pconn, args, resume_state, start_time):
 # Resume File Functions & Result Appending
 ########################################
 
-def load_resume(resume_file, mode):
+def load_resume(resume_file, mode = None):
     if os.path.exists(resume_file):
         with open(resume_file, "r") as f:
             try:
                 data = json.load(f)
+                if mode is None:
+                    return data
                 if data.get("mode") == mode:
                     return data
             except Exception:
@@ -403,7 +405,7 @@ if __name__ == "__main__":
 
     # If --resume is set, load configuration parameters from the resume file.
     if args.resume and args.project:
-        resume_config = load_resume(args.resume_file, args.mode if args.mode else "single")
+        resume_config = load_resume(args.resume_file)
         if resume_config and "config" in resume_config:
             for key in ["host", "port", "mode", "flipbits_slot", "apply_slot", "update_size",
                         "bit_start", "bit_end", "region1_start", "region1_end", "region2_start", "region2_end",
