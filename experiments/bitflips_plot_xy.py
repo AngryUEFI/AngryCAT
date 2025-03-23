@@ -25,8 +25,6 @@ def filter_double_results(results, lower_threshold, upper_threshold):
     """
     filtered = []
     for entry in results:
-        if entry.get("mode") != "double":
-            continue
         if "rdtsc_diff" not in entry or entry["rdtsc_diff"] is None:
             continue
         rdtsc = entry["rdtsc_diff"]
