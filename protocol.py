@@ -331,17 +331,19 @@ class MsgSizePacket(Packet):
 class UcodeResponsePacket(Packet):
     message_type = PacketType.UCODERESPONSE
 
-    def __init__(self, *, payload: bytes = None, rdtsc_diff: int = None):
+    def __init__(self, *, payload: bytes = None, rdtsc_diff: int = None, rax: int = None):
         # Structure: 8-byte rdtsc difference.
         if payload is not None:
             self.rdtsc_diff = struct.unpack("<Q", payload[:8])[0]
-        elif rdtsc_diff is not None:
+            self.rax = struct.unpack("<Q", payload[8:16])[0]
+        elif rdtsc_diff is not None and rax is not None:
             self.rdtsc_diff = rdtsc_diff
+            self.rax = rax
         else:
             raise ValueError("Either payload or rdtsc_diff must be provided.")
 
     def pack(self) -> bytes:
-        payload = struct.pack("<Q", self.rdtsc_diff)
+        payload = struct.pack("<QQ", self.rdtsc_diff, self.rax)
         header = struct.pack("<I4B I",
                              len(payload) + 8,
                              self.major, self.minor, self.control, self.reserved,
@@ -349,7 +351,7 @@ class UcodeResponsePacket(Packet):
         return header + payload
 
     def __repr__(self):
-        return f"UcodeResponsePacket(rdtsc_diff={self.rdtsc_diff}, control={self.control})"
+        return f"UcodeResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, control={self.control})"
 
 class MsrResponsePacket(Packet):
     message_type = PacketType.MSRRESPONSE

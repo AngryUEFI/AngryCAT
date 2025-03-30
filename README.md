@@ -185,9 +185,13 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
     * only some basic instructions are executed to load registers
     * no memory accesses are done
     * check AngryUEIF/stubs.s for instruction list
+* Returns RAX
+    * the GPF handler writes 0xdead to RAX
+    * GPF is triggered if the ucode update is rejected
 
 ### Structure
 * 8 Byte LE unsigned - `rdtsc` difference
+* 8 Byte LE unsigned - value of RAX
 
 ## MSRRESPONSE
 * ID 0x80000201
