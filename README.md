@@ -17,7 +17,7 @@ Uses uv as package manager, e.g. `pacman -S uv`.
 
 # Protocol
 
-AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1036 = 1024+12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
+AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1052 = 1024 + 24 + 12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
 
 ## Packets
 A packet is a single request to AngryUEFI or a single response from AngryUEFI. 
@@ -139,6 +139,23 @@ These messages are sent from AngryCAT to AngryUEFI.
     * 1 Byte flags, Bit 0: LSB
         * Bit 0 - apply known good update after the test update
 
+## APPLYUCODEEXCUTETEST
+* ID 0x151
+* Applies the ucode in the specified slot
+* Microcode is applied with interrupts disabled
+* Runs the machine code in specified slot
+* Responds with a UCODEEXECUTETESTRESPONSE
+* Optionally applies the known good update afterwards
+    * this is done directly in the assembly stub to limit executed instructions
+
+### Structure
+* 4 Byte unsigned LE target ucode slot
+* 4 Byte unsigned LE target machine code slot
+* 4 Byte unsigned LE options
+    * 3 Byte unused
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - apply known good update after the test update
+
 ## READMSR
 * ID 0x201
 * Reads the specified MSR
@@ -146,6 +163,22 @@ These messages are sent from AngryCAT to AngryUEFI.
 
 ### Structure
 * 4 Byte unsigned LE target MSR
+
+## SENDMACHINECODE
+* ID 0x301
+* Stores the given bytes in the specified machine code slot
+* Responds with a STATUS
+
+* AngryUEFI currently has 10 slots in total
+    * Initial machine code - slot 0 NOTE: not implemented yet
+    * free slots - slots 1-9
+* returns a STATUS response
+
+### Structure
+* 4 Byte unsigned LE target slot
+* 4 Byte unsigned LE machine code size
+* machine code bytes
+
 
 # Responses
 These messages are sent from AngryUEFI to AngryCAT after receiving a request.
@@ -189,9 +222,25 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
     * the GPF handler writes 0xdead to RAX
     * GPF is triggered if the ucode update is rejected
 
+## UCODEEXECUTETESTRESPONSE
+* ID 0x80000151
+* Returns the `rdtsc` difference
+    * `rdtscp` is run before and after the `wrmsr` instruction
+    * *Note*: the emulator does not support `rdtscp`, currently `rdtsc` is used
+    * only some basic instructions are executed to load registers
+    * no memory accesses are done
+    * check AngryUEIF/stubs.s for instruction list
+* Returns RAX
+    * the GPF handler writes 0xdead to RAX
+    * GPF is triggered if the ucode update is rejected
+* Returns the contents of the result buffer
+    * Length is returned as 8 Byte in the packet
+
 ### Structure
 * 8 Byte LE unsigned - `rdtsc` difference
 * 8 Byte LE unsigned - value of RAX
+* 8 Byte LE unsigned - length of result buffer
+* up to 1024 Bytes result buffer
 
 ## MSRRESPONSE
 * ID 0x80000201

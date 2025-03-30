@@ -13,12 +13,15 @@ class PacketType(Enum):
     FLIPBITS     = 0x121
     APPLYUCODE   = 0x141
     READMSR      = 0x201
+    APPLYUCODEEXCUTETEST = 0x151
+    SENDMACHINECODE      = 0x301
     # Response Packet Types
     STATUS       = 0x80000000
     PONG         = 0x80000001
     MSGSIZE      = 0x80000003
     UCODERESPONSE = 0x80000141
     MSRRESPONSE  = 0x80000201
+    UCODEEXECUTETESTRESPONSE = 0x80000151
 
 # Base class for all packets.
 class Packet:
@@ -251,6 +254,65 @@ class ReadMsrPacket(Packet):
     def __repr__(self):
         return f"ReadMsrPacket(target_msr={self.target_msr}, control={self.control})"
 
+class ApplyUcodeExecuteTestPacket(Packet):
+    message_type = PacketType.APPLYUCODEEXCUTETEST
+
+    def __init__(self, *, payload: bytes = None, target_ucode_slot: int = None, target_machine_code_slot: int = None, apply_known_good: bool = None):
+        # Structure: 4-byte target ucode slot, 4-byte target machine code slot, 4-byte options.
+        if payload is not None:
+            self.target_ucode_slot = struct.unpack("<I", payload[:4])[0]
+            self.target_machine_code_slot = struct.unpack("<I", payload[4:8])[0]
+            options = struct.unpack("<I", payload[8:12])[0]
+            self.apply_known_good = bool(options & 0x1)
+        elif target_ucode_slot is not None and target_machine_code_slot is not None and apply_known_good is not None:
+            self.target_ucode_slot = target_ucode_slot
+            self.target_machine_code_slot = target_machine_code_slot
+            self.apply_known_good = apply_known_good
+        else:
+            raise ValueError("Either payload or all of target_ucode_slot, target_machine_code_slot, and apply_known_good must be provided.")
+
+    def pack(self) -> bytes:
+        options = 1 if self.apply_known_good else 0
+        payload = struct.pack("<III", self.target_ucode_slot, self.target_machine_code_slot, options)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return (f"ApplyUcodeExecuteTestPacket(target_ucode_slot={self.target_ucode_slot}, "
+                f"target_machine_code_slot={self.target_machine_code_slot}, apply_known_good={self.apply_known_good}, "
+                f"control={self.control})")
+
+class SendMachineCodePacket(Packet):
+    message_type = PacketType.SENDMACHINECODE
+
+    def __init__(self, *, payload: bytes = None, target_slot: int = None, machine_code: bytes = None):
+        # Structure: 4-byte target slot, 4-byte machine code size, then machine code bytes.
+        if payload is not None:
+            self.target_slot = struct.unpack("<I", payload[:4])[0]
+            code_size = struct.unpack("<I", payload[4:8])[0]
+            self.machine_code = payload[8:8+code_size]
+        elif target_slot is not None and machine_code is not None:
+            self.target_slot = target_slot
+            self.machine_code = machine_code
+        else:
+            raise ValueError("Either payload or both target_slot and machine_code must be provided.")
+
+    def pack(self) -> bytes:
+        code_size = len(self.machine_code)
+        payload = struct.pack("<II", self.target_slot, code_size) + self.machine_code
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"SendMachineCodePacket(target_slot={self.target_slot}, machine_code_size={len(self.machine_code)}, control={self.control})"
+
+
 # ======== Response Packets ========
 
 class StatusPacket(Packet):
@@ -408,27 +470,50 @@ class RebootPacket(Packet):
     def __repr__(self):
         return f"RebootPacket(warm={self.warm}, control={self.control})"
 
+class UcodeExecuteTestResponsePacket(Packet):
+    message_type = PacketType.UCODEEXECUTETESTRESPONSE
+
+    def __init__(self, *, payload: bytes = None, rdtsc_diff: int = None, rax: int = None, result_buffer: bytes = None):
+        # Structure: 8-byte rdtsc difference, 8-byte RAX, 8-byte result length, then result buffer.
+        if payload is not None:
+            self.rdtsc_diff = struct.unpack("<Q", payload[:8])[0]
+            self.rax = struct.unpack("<Q", payload[8:16])[0]
+            result_len = struct.unpack("<Q", payload[16:24])[0]
+            self.result_buffer = payload[24:24+result_len]
+        elif rdtsc_diff is not None and rax is not None and result_buffer is not None:
+            self.rdtsc_diff = rdtsc_diff
+            self.rax = rax
+            self.result_buffer = result_buffer
+        else:
+            raise ValueError("Either payload or rdtsc_diff, rax, and result_buffer must be provided.")
+
+    def pack(self) -> bytes:
+        result_len = len(self.result_buffer)
+        payload = (struct.pack("<Q", self.rdtsc_diff) +
+                   struct.pack("<Q", self.rax) +
+                   struct.pack("<Q", result_len) +
+                   self.result_buffer)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return (f"UcodeExecuteTestResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, "
+                f"result_buffer_length={len(self.result_buffer)}, control={self.control})")
+
+
 
 # ======== Packet Parser ========
 
 def parse_packet(data: bytes) -> Packet:
-    """
-    Given a complete binary packet (including header), parse it into the appropriate Packet subclass.
-    The header is 12 bytes:
-      - 4 bytes: Message Length (unsigned little-endian), which is the total length of metadata, message type, and payload.
-      - 4 bytes: Metadata (Major, Minor, Control, Reserved).
-      - 4 bytes: Message Type.
-    The total packet length should equal 4 + Message Length.
-    This function assigns the header fields (major, minor, control, reserved) to the returned packet.
-    """
     if len(data) < 12:
         raise ValueError("Data too short to be a valid packet.")
-
     msg_len, maj, mino, ctrl, res, msg_type = struct.unpack("<I4B I", data[:12])
     total_len = 4 + msg_len
     if len(data) != total_len:
         raise ValueError(f"Data length mismatch: expected {total_len} bytes, got {len(data)} bytes.")
-
     payload = data[12:]
     if msg_type == PacketType.PING.value:
         pkt = PingPacket(payload=payload)
@@ -446,6 +531,10 @@ def parse_packet(data: bytes) -> Packet:
         pkt = ReadMsrPacket(payload=payload)
     elif msg_type == PacketType.REBOOT.value:
         pkt = RebootPacket(payload=payload)
+    elif msg_type == PacketType.APPLYUCODEEXCUTETEST.value:
+        pkt = ApplyUcodeExecuteTestPacket(payload=payload)
+    elif msg_type == PacketType.SENDMACHINECODE.value:
+        pkt = SendMachineCodePacket(payload=payload)
     elif msg_type == PacketType.STATUS.value:
         pkt = StatusPacket(payload=payload)
     elif msg_type == PacketType.PONG.value:
@@ -456,14 +545,16 @@ def parse_packet(data: bytes) -> Packet:
         pkt = UcodeResponsePacket(payload=payload)
     elif msg_type == PacketType.MSRRESPONSE.value:
         pkt = MsrResponsePacket(payload=payload)
+    elif msg_type == PacketType.UCODEEXECUTETESTRESPONSE.value:
+        pkt = UcodeExecuteTestResponsePacket(payload=payload)
     else:
         pkt = UnknownPacket(msg_type, payload)
-
     pkt.major = maj
     pkt.minor = mino
     pkt.control = ctrl
     pkt.reserved = res
     return pkt
+
 
 # ======== Example Usage ========
 if __name__ == "__main__":
