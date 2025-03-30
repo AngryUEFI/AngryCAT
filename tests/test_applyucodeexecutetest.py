@@ -47,6 +47,8 @@ def send_apply_ucode_execute_test(target_ucode_slot: int, target_machine_code_sl
 class ApplyUcodeExecuteTestNetworkTestCase(unittest.TestCase):
     def test_send_machine_code(self):
         """Send the machine code to slot 1 and verify that a STATUS response with code 0 is returned."""
+        # mov rdx, 0xdeadbeefc0febabe; mov rax, [rax]; mov [rax], rdx; ret
+        # rax holds address of meta data structure
         machine_code = bytes([
             0x48, 0xBA, 0xBE, 0xBA, 0xFE, 0xC0, 0xEF, 0xBE, 0xAD, 0xDE, 0x48, 0x8B, 0x00, 0x48, 0x89, 0x10, 0xC3
         ])
@@ -60,6 +62,8 @@ class ApplyUcodeExecuteTestNetworkTestCase(unittest.TestCase):
         """Send a SENDMACHINECODE followed by an APPLYUCODEEXCUTETEST command,
         then verify that the UCODEEXECUTETESTRESPONSE response's result buffer starts with 0xdeadbeefc0febabe."""
         # First, send the machine code test buffer to machine code slot 1.
+        # mov rdx, 0xdeadbeefc0febabe; mov rax, [rax]; mov [rax], rdx; ret
+        # rax holds address of meta data structure
         machine_code = bytes([
             0x48, 0xBA, 0xBE, 0xBA, 0xFE, 0xC0, 0xEF, 0xBE, 0xAD, 0xDE, 0x48, 0x8B, 0x00, 0x48, 0x89, 0x10, 0xC3
         ])
