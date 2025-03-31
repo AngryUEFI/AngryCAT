@@ -17,7 +17,7 @@ Uses uv as package manager, e.g. `pacman -S uv`.
 
 # Protocol
 
-AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1052 = 1024 + 24 + 12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
+AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1052 = 1024 + 32 + 12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
 
 ## Packets
 A packet is a single request to AngryUEFI or a single response from AngryUEFI. 
@@ -144,6 +144,9 @@ These messages are sent from AngryCAT to AngryUEFI.
 * Applies the ucode in the specified slot
 * Microcode is applied with interrupts disabled
 * Runs the machine code in specified slot
+* Executes on given core number
+* TODO: timeout is broken, must set to 0 for now (AngryUEFI is missing a timer implementation)
+* TODO: core != 0 required further testing, only basic testing has been performed
 * Responds with a UCODEEXECUTETESTRESPONSE
 * Optionally applies the known good update afterwards
     * this is done directly in the assembly stub to limit executed instructions
@@ -151,6 +154,8 @@ These messages are sent from AngryCAT to AngryUEFI.
 ### Structure
 * 4 Byte unsigned LE target ucode slot
 * 4 Byte unsigned LE target machine code slot
+* 4 Byte unsigned LE target core number
+* 4 Byte unsigned LE timeout in ms for execution, 0 for unlimited
 * 4 Byte unsigned LE options
     * 3 Byte unused
     * 1 Byte flags, Bit 0: LSB
@@ -163,6 +168,14 @@ These messages are sent from AngryCAT to AngryUEFI.
 
 ### Structure
 * 4 Byte unsigned LE target MSR
+
+## GETCORECOUNT
+* ID 0x211
+* Returns the core count of the system
+* Responds with a CORECOUNTRESPONSE
+
+### Structure
+* No parameters
 
 ## SENDMACHINECODE
 * ID 0x301
@@ -233,12 +246,17 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * Returns RAX
     * the GPF handler writes 0xdead to RAX
     * GPF is triggered if the ucode update is rejected
+* Returns a flag field with execution status
 * Returns the contents of the result buffer
     * Length is returned as 8 Byte in the packet
 
 ### Structure
 * 8 Byte LE unsigned - `rdtsc` difference
 * 8 Byte LE unsigned - value of RAX
+* 8 Byte unsigned LE flags
+    * 7 Byte unused
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - set if timeout was reached when waiting for execution to complete
 * 8 Byte LE unsigned - length of result buffer
 * up to 1024 Bytes result buffer
 
@@ -249,3 +267,12 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 ### Strucutre
 * 4 Byte LE unsigned - EAX value
 * 4 Byte LE unsigned - EDX value
+
+## CORECOUNTRESPONSE
+* ID 0x80000211
+* Contains the core count of the processor
+* if 0 an error during execution was found
+* should be at least 1
+
+### Strucutre
+* 8 Byte LE unsigned - core count
