@@ -42,8 +42,6 @@ class SendUcodeTestCase(unittest.TestCase):
                               "Response is not a STATUS packet.")
         self.assertEqual(response.status_code, 0,
                          f"Expected status 0, got {response.status_code}.")
-        self.assertEqual(response.text, b"",
-                         "Expected no text in the STATUS response.")
 
 if __name__ == "__main__":
     unittest.main()

@@ -134,7 +134,7 @@ def send_reboot(pconn, warm=False):
         print("Error sending REBOOT packet:", e)
 
 def send_ping(pconn, message="ping"):
-    pkt = PingPacket(message=message.encode("utf_16_be"))
+    pkt = PingPacket(message=message.encode("utf_16_le"))
     response = pconn.send_packet(pkt.pack())
     return response
 
@@ -146,7 +146,7 @@ def wait_for_reboot(host, port, ping_message="ping", retry_interval=1):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(1)
                 sock.connect((host, port))
-                sock.sendall(PingPacket(message=ping_message.encode("utf_16_be")).pack())
+                sock.sendall(PingPacket(message=ping_message.encode("utf_16_le")).pack())
                 response = Packet.read_from_socket(sock)
                 if response:
                     print("System is back online.")

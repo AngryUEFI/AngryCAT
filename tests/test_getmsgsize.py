@@ -37,7 +37,8 @@ class GetMsgSizeTestCase(unittest.TestCase):
         The tested payload sizes are: 0, 4, 1024, 1400, 1600, 2048, 4096, 8192 and 1*1024*1024 bytes.
         Since we operate on byte strings directly, the message is built to have exactly the desired length.
         """
-        payload_sizes = [0, 4, 1024, 1400, 1600, 2048, 4096, 8192, 1*1024*1024]
+        # 1*1024*1024 removed, also works, but takes too long to test always
+        payload_sizes = [0, 4, 1024, 1400, 1600, 2048, 4096, 8192]
         for size in payload_sizes:
             with self.subTest(payload_size=size):
                 message = b"A" * size

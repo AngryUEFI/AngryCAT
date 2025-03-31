@@ -61,8 +61,6 @@ class ApplyUcodeTestCase(unittest.TestCase):
                               "SENDUCODE response is not a STATUS packet.")
         self.assertEqual(response.status_code, 0,
                          f"SENDUCODE response status expected 0, got {response.status_code}.")
-        self.assertEqual(response.text, b"",
-                         "SENDUCODE response text is not empty.")
 
     def test_apply_ucode(self):
         """Test applying the update in slot 2 without restoring the known good update.

@@ -16,6 +16,9 @@ class PacketType(Enum):
     APPLYUCODEEXCUTETEST = 0x151
     SENDMACHINECODE      = 0x301
     GETCORECOUNT         = 0x211
+    GETLASTTESTRESULT    = 0x152
+    STARTCORE            = 0x212
+    GETCORESTATUS        = 0x213
     # Response Packet Types
     STATUS       = 0x80000000
     PONG         = 0x80000001
@@ -24,6 +27,7 @@ class PacketType(Enum):
     MSRRESPONSE  = 0x80000201
     UCODEEXECUTETESTRESPONSE = 0x80000151
     CORECOUNTRESPONSE        = 0x80000211
+    CORESTATUSRESPONSE       = 0x80000213
 
 # Base class for all packets.
 class Packet:
@@ -348,6 +352,75 @@ class SendMachineCodePacket(Packet):
     def __repr__(self):
         return f"SendMachineCodePacket(target_slot={self.target_slot}, machine_code_size={len(self.machine_code)}, control={self.control})"
 
+class GetLastTestResultPacket(Packet):
+    message_type = PacketType.GETLASTTESTRESULT 
+
+    def __init__(self, *, payload: bytes = None, core: int = None):
+        # Payload: 8-byte unsigned LE core number.
+        if payload is not None:
+            self.core = struct.unpack("<Q", payload[:8])[0]
+        elif core is not None:
+            self.core = core
+        else:
+            raise ValueError("Either payload or core must be provided.")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<Q", self.core)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"GetLastTestResultPacket(core={self.core})"
+
+class StartCorePacket(Packet):
+    message_type = PacketType.STARTCORE
+
+    def __init__(self, *, payload: bytes = None, core: int = None):
+        # Payload: 8-byte unsigned LE core number.
+        if payload is not None:
+            self.core = struct.unpack("<Q", payload[:8])[0]
+        elif core is not None:
+            self.core = core
+        else:
+            raise ValueError("Either payload or core must be provided.")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<Q", self.core)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"StartCorePacket(core={self.core})"
+
+class GetCoreStatusPacket(Packet):
+    message_type = PacketType.GETCORESTATUS
+
+    def __init__(self, *, payload: bytes = None, core: int = None):
+        # Payload: 8-byte unsigned LE core number.
+        if payload is not None:
+            self.core = struct.unpack("<Q", payload[:8])[0]
+        elif core is not None:
+            self.core = core
+        else:
+            raise ValueError("Either payload or core must be provided.")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<Q", self.core)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return f"GetCoreStatusPacket(core={self.core})"
+
 
 # ======== Response Packets ========
 
@@ -359,7 +432,7 @@ class StatusPacket(Packet):
         if payload is not None:
             self.status_code = struct.unpack("<I", payload[:4])[0]
             text_len = struct.unpack("<I", payload[4:8])[0]
-            self.text = payload[8:8+text_len] if text_len > 0 else b""
+            self.text = payload[8:8+text_len].decode("utf_16_le") if text_len > 0 else ""
         elif status_code is not None:
             self.status_code = status_code
             self.text = text
@@ -367,7 +440,7 @@ class StatusPacket(Packet):
             raise ValueError("Either payload or status_code must be provided.")
 
     def pack(self) -> bytes:
-        text_bytes = self.text
+        text_bytes = bytes(self.text, "utf_16_le")
         payload = struct.pack("<I", self.status_code) + struct.pack("<I", len(text_bytes)) + text_bytes
         header = struct.pack("<I4B I",
                              len(payload) + 8,
@@ -376,7 +449,7 @@ class StatusPacket(Packet):
         return header + payload
 
     def __repr__(self):
-        return f"StatusPacket(status_code={self.status_code}, text={self.text}, control={self.control})"
+        return f"StatusPacket(status_code=0x{self.status_code:X}, text={self.text}, control={self.control})"
 
 class PongPacket(Packet):
     message_type = PacketType.PONG
@@ -571,6 +644,61 @@ class UcodeExecuteTestResponsePacket(Packet):
         return (f"UcodeExecuteTestResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, "
                 f"flags={self.flags:#018x}, result_buffer_length={len(self.result_buffer)}, control={self.control})")
 
+class CoreStatusResponsePacket(Packet):
+    message_type = PacketType.CORESTATUSRESPONSE
+
+    def __init__(self, *, payload: bytes = None, flags: int = None, last_heartbeat: int = None, current_rdtsc: int = None):
+        # Structure: 
+        # 8-byte unsigned LE flags,
+        # 8-byte unsigned LE last heartbeat RDTSC,
+        # 8-byte unsigned LE current RDTSC.
+        if payload is not None:
+            self.flags = struct.unpack("<Q", payload[:8])[0]
+            self.last_heartbeat = struct.unpack("<Q", payload[8:16])[0]
+            self.current_rdtsc = struct.unpack("<Q", payload[16:24])[0]
+        elif flags is not None and last_heartbeat is not None and current_rdtsc is not None:
+            self.flags = flags
+            self.last_heartbeat = last_heartbeat
+            self.current_rdtsc = current_rdtsc
+        else:
+            raise ValueError("Either payload or all of flags, last_heartbeat, and current_rdtsc must be provided.")
+
+    @property
+    def present(self):
+        return bool(self.flags & 0x1)
+
+    @property
+    def started(self):
+        return bool(self.flags & 0x2)
+
+    @property
+    def ready(self):
+        return bool(self.flags & 0x4)
+
+    @property
+    def job_queued(self):
+        return bool(self.flags & 0x8)
+
+    @property
+    def is_locked(self):
+        return bool(self.flags & 0x10)
+
+    def pack(self) -> bytes:
+        payload = (
+            struct.pack("<Q", self.flags) +
+            struct.pack("<Q", self.last_heartbeat) +
+            struct.pack("<Q", self.current_rdtsc)
+        )
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return (f"CoreStatusResponsePacket(flags={self.flags:#018x} (present={self.present}, started={self.started}, "
+                f"ready={self.ready}, job_queued={self.job_queued}, is_locked={self.is_locked}), "
+                f"last_heartbeat={self.last_heartbeat}, current_rdtsc={self.current_rdtsc}, control={self.control})")
 
 
 # ======== Packet Parser ========
@@ -603,6 +731,14 @@ def parse_packet(data: bytes) -> Packet:
         pkt = ApplyUcodeExecuteTestPacket(payload=payload)
     elif msg_type == PacketType.SENDMACHINECODE.value:
         pkt = SendMachineCodePacket(payload=payload)
+    elif msg_type == PacketType.GETCORECOUNT.value:
+        pkt = GetCoreCountPacket(payload=payload)
+    elif msg_type == PacketType.GETLASTTESTRESULT.value:
+        pkt = GetLastTestResultPacket(payload=payload)
+    elif msg_type == PacketType.STARTCORE.value:
+        pkt = StartCorePacket(payload=payload)
+    elif msg_type == PacketType.GETCORESTATUS.value:
+        pkt = GetCoreStatusPacket(payload=payload)
     elif msg_type == PacketType.STATUS.value:
         pkt = StatusPacket(payload=payload)
     elif msg_type == PacketType.PONG.value:
@@ -617,8 +753,8 @@ def parse_packet(data: bytes) -> Packet:
         pkt = UcodeExecuteTestResponsePacket(payload=payload)
     elif msg_type == PacketType.CORECOUNTRESPONSE.value:
         pkt = CoreCountResponsePacket(payload=payload)
-    elif msg_type == PacketType.GETCORECOUNT.value:
-        pkt = GetCoreCountPacket(payload=payload)
+    elif msg_type == PacketType.CORESTATUSRESPONSE.value:
+        pkt = CoreStatusResponsePacket(payload=payload)
     else:
         raise ValueError(f"Unknown packet type 0x{msg_type:08X}.")
     pkt.major = maj

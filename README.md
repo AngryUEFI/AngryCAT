@@ -17,7 +17,7 @@ Uses uv as package manager, e.g. `pacman -S uv`.
 
 # Protocol
 
-AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 8204 = 8192+12 Bytes. Response messages are up to 1052 = 1024 + 32 + 12 Bytes. Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_be` should work.
+AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 1MB + 12 Bytes. Response messages are up to 1412 = 1400 (Payload) + 12 (Header) Bytes (under default MTU of 1500). Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_le` should work.
 
 ## Packets
 A packet is a single request to AngryUEFI or a single response from AngryUEFI. 
@@ -30,7 +30,7 @@ The header is 12 Bytes. Unless otherwise noted integers are unsigned little-endi
 * 4 Byte Message Type
 
 #### Message Length
-32 bit unsigned little-endian integer. Length does not include this field, but all other header fields and the actual payload. The maximum valid length value is thus 8192 Bytes Payload + 4 Bytes Message Type + 4 Bytes Metadata = 8200 Bytes.
+32 bit unsigned little-endian integer. Length does not include this field, but all other header fields and the actual payload. The maximum valid length value is thus 1MB Bytes Payload + 4 Bytes Message Type + 4 Bytes Metadata.
 
 #### Metadata
 * 1 Byte Major Version = 1
@@ -47,7 +47,7 @@ The control Byte encodes the following bitfields. Bit 7 denotes the MSB, Bit 0 t
 By convention requests have MSB not set, responses have MSB set.
 
 ### Payload
-Maximum 8192 Bytes. Actual length denoted by Message Length field - 8. Contents depend on the Message Type.
+Maximum 1MB. Actual length denoted by Message Length field - 8. Contents depend on the Message Type.
 
 # Requests
 These messages are sent from AngryCAT to AngryUEFI.
@@ -145,21 +145,34 @@ These messages are sent from AngryCAT to AngryUEFI.
 * Microcode is applied with interrupts disabled
 * Runs the machine code in specified slot
 * Executes on given core number
-* TODO: timeout is broken, must set to 0 for now (AngryUEFI is missing a timer implementation)
-* TODO: core != 0 required further testing, only basic testing has been performed
+* Timeout is the amount 1ms stalls core 0 waits for the job to switch to Ready state after the job was launched
+* Timeout = 0 means to wait forever, not recommended as jobs can lock up a core
+* If the job is run on core 0 timeout is disregarded
 * Responds with a UCODEEXECUTETESTRESPONSE
 * Optionally applies the known good update afterwards
     * this is done directly in the assembly stub to limit executed instructions
+* If the ucode update is rejected (aka GPF handler is entered), the machine code is not executed
 
 ### Structure
 * 4 Byte unsigned LE target ucode slot
 * 4 Byte unsigned LE target machine code slot
 * 4 Byte unsigned LE target core number
-* 4 Byte unsigned LE timeout in ms for execution, 0 for unlimited
+* 4 Byte unsigned LE timeout in roughly ms for execution, 0 for unlimited
 * 4 Byte unsigned LE options
     * 3 Byte unused
     * 1 Byte flags, Bit 0: LSB
         * Bit 0 - apply known good update after the test update
+
+## GETLASTTESTRESULT
+* ID 0x152
+* Get the result of the last executed test on requested core
+* Returns two messages, in this order:
+    * Returns a CORESTATUSRESPONSE (last message = False)
+    * Returns a UCODEEXECUTETESTRESPONSE (last message = True)
+* Returns the state as-is, if a job on the core is still running this might be invalid/corrupted
+
+### Structure
+* 8 Byte unsigned LE core number
 
 ## READMSR
 * ID 0x201
@@ -176,6 +189,29 @@ These messages are sent from AngryCAT to AngryUEFI.
 
 ### Structure
 * No parameters
+
+## STARTCORE
+* ID 0x212
+* Start the specified core ID
+* Core will go into a busy wait loop until a test is started on it
+* After a test the core will again busy wait for a new test
+* Once started a core can not be stopped, reboot the system to stop it
+* Core 0 is the boot core and always running
+* Send core = 0 to start all avaible cores
+* Responds with a STATUS response
+
+### Structure
+* 8 Byte unsigned LE core to start
+
+## GETCORESTATUS
+* ID 0x213
+* Get the status of the specified core ID
+* Core ID 0 is the boot core
+* Core 0 can not be stopped/busy, it runs the network stack
+* Responds with a CORESTATUSRESPONSE
+
+### Structure
+* 8 Byte unsigned LE core to get information on
 
 ## SENDMACHINECODE
 * ID 0x301
@@ -227,10 +263,9 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * ID 0x80000141
 * Returns the `rdtsc` difference
     * `rdtscp` is run before and after the `wrmsr` instruction
-    * *Note*: the emulator does not support `rdtscp`, currently `rdtsc` is used
     * only some basic instructions are executed to load registers
     * no memory accesses are done
-    * check AngryUEIF/stubs.s for instruction list
+    * check AngryUEFI/stubs.s for instruction list
 * Returns RAX
     * the GPF handler writes 0xdead to RAX
     * GPF is triggered if the ucode update is rejected
@@ -239,24 +274,23 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * ID 0x80000151
 * Returns the `rdtsc` difference
     * `rdtscp` is run before and after the `wrmsr` instruction
-    * *Note*: the emulator does not support `rdtscp`, currently `rdtsc` is used
     * only some basic instructions are executed to load registers
-    * no memory accesses are done
-    * check AngryUEIF/stubs.s for instruction list
+    * check AngryUEFI/stubs.s for instruction list
 * Returns RAX
     * the GPF handler writes 0xdead to RAX
     * GPF is triggered if the ucode update is rejected
 * Returns a flag field with execution status
+* If the job has not finished, this is the current status and might be incomplete/corrupted/undefined
 * Returns the contents of the result buffer
     * Length is returned as 8 Byte in the packet
 
 ### Structure
 * 8 Byte LE unsigned - `rdtsc` difference
 * 8 Byte LE unsigned - value of RAX
-* 8 Byte unsigned LE flags
+* 8 Byte unsigned LE job flags
     * 7 Byte unused
     * 1 Byte flags, Bit 0: LSB
-        * Bit 0 - set if timeout was reached when waiting for execution to complete
+        * Bit 0 - set if timeout was reached when waiting for execution to complete; always 0 in response to GETLASTTESTRESULT
 * 8 Byte LE unsigned - length of result buffer
 * up to 1024 Bytes result buffer
 
@@ -276,3 +310,21 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 
 ### Strucutre
 * 8 Byte LE unsigned - core count
+
+## CORESTATUSRESPONSE
+* ID 0x80000213
+* Contains the status of the requested core
+* Core 0 is the boot core and will always report (Present, Started, Ready, Not Queued)
+* Note on timestamps: on modern CPUs this should be constant even across cores, but keep in mind that these come from two different cores
+
+### Strucutre
+* 8 Byte unsigned LE flags
+    * 7 Byte unused
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - Present Bit: if set -> requestd core is present, if not set -> requested core is not present, all other values are undefined
+        * Bit 1 - Started Bit: if set -> core was started, if not set -> core was not started and can be started
+        * Bit 2 - Ready Bit: if set -> core is ready to accept a job, if not set -> core is running a job or hanging
+        * Bit 3 - Job Queued Bit: if set -> core has a queued job, all data for the job was written, but has not picked it up yet, if not set -> core has picked up the job or job is still being written
+        * Bit 4 - Context Locked Bit: if set -> context is currently locked, if not set -> context is not locked
+* 8 Byte unsigned LE last heartbeat RDTSC - when the core last updated its heartbeat field, core 0 does not regularly update this field
+* 8 Byte unsigned LE current RDTSC - RDTSC on core 0 when this resonse was generated, used as reference for requested core heartbeat

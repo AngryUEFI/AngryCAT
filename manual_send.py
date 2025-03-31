@@ -3,6 +3,7 @@ import argparse
 import socket
 import sys
 import os
+import struct
 
 from protocol import (
     PingPacket,
@@ -11,6 +12,9 @@ from protocol import (
     ApplyUcodePacket,
     ReadMsrPacket,
     RebootPacket,
+    GetLastTestResultPacket,
+    StartCorePacket,
+    GetCoreStatusPacket,
     Packet,
     StatusPacket,
     PongPacket,
@@ -19,34 +23,44 @@ from protocol import (
 )
 
 def send_packet(packet, host, port):
+    responses = []
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((host, port))
         sock.sendall(packet.pack())
-        response = Packet.read_from_socket(sock)
-    return response
+        # Read responses until the control field indicates end-of-transmission.
+        while True:
+            response = Packet.read_from_socket(sock)
+            responses.append(response)
+            # Check the control field: bit0 = 0 means no more messages.
+            if (response.control & 0x1) == 0:
+                break
+    return responses
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Manually send packets to AngryUEFI and print the response."
+        description="Manually send packets to AngryUEFI and print the response(s)."
     )
     parser.add_argument("--host", type=str, default="127.0.0.1", help="AngryUEFI host")
     parser.add_argument("--port", type=int, default=3239, help="AngryUEFI port")
     parser.add_argument("--type", type=str, required=True,
-                        choices=["PING", "SENDUCODE", "FLIPBITS", "APPLYUCODE", "READMSR", "REBOOT"],
+                        choices=["PING", "SENDUCODE", "FLIPBITS", "APPLYUCODE", "READMSR", "REBOOT",
+                                 "GETLASTTESTRESULT", "STARTCORE", "GETCORESTATUS"],
                         help="Type of packet to send")
-    # Arguments for PING
+    # For PING:
     parser.add_argument("--message", type=str, help="Message to send for PING")
-    # Arguments for SENDUCODE
+    # For SENDUCODE:
     parser.add_argument("--target-slot", type=int, help="Target slot for SENDUCODE (or APPLYUCODE) commands")
     parser.add_argument("--file", type=str, help="Path to the update file for SENDUCODE")
-    # Arguments for FLIPBITS
+    # For FLIPBITS:
     parser.add_argument("--positions", type=str, help="Comma-separated bit positions for FLIPBITS")
-    # Arguments for APPLYUCODE
-    parser.add_argument("--apply-known-good", action="store_true", help="If present, apply known good update after test update")
-    # Arguments for READMSR
-    parser.add_argument("--msr", type=str, help="MSR in hex to read for READMSR (e.g. 0x10)")
-    # Arguments for REBOOT
-    parser.add_argument("--reboot-warm", action="store_true", help="If present, perform a warm reboot (otherwise cold)")
+    # For APPLYUCODE:
+    parser.add_argument("--apply-known-good", action="store_true", help="Apply known good update after test update")
+    # For READMSR:
+    parser.add_argument("--msr", type=str, help="MSR in hex to read (e.g. 0x10)")
+    # For GETLASTTESTRESULT, STARTCORE, GETCORESTATUS:
+    parser.add_argument("--core", type=int, help="Core number for GETLASTTESTRESULT, STARTCORE, or GETCORESTATUS")
+    # For REBOOT:
+    parser.add_argument("--reboot-warm", action="store_true", help="Perform a warm reboot if set (default is cold)")
     
     args = parser.parse_args()
     
@@ -61,8 +75,8 @@ def main():
             if not args.message:
                 print("For PING, --message is required.")
                 sys.exit(1)
-            # Convert message to bytes using UTF-16 BE encoding.
-            packet = PingPacket(message=args.message.encode("utf_16_be"))
+            # Using utf_16_le encoding for consistency.
+            packet = PingPacket(message=args.message.encode("utf_16_le"))
         elif cmd_type == "SENDUCODE":
             if args.target_slot is None or not args.file:
                 print("For SENDUCODE, --target-slot and --file are required.")
@@ -99,8 +113,25 @@ def main():
                 sys.exit(1)
             packet = ReadMsrPacket(target_msr=msr_val)
         elif cmd_type == "REBOOT":
-            # For REBOOT, use the --reboot-warm flag (default is cold reboot).
             packet = RebootPacket(warm=args.reboot_warm)
+        elif cmd_type == "GETLASTTESTRESULT":
+            if args.core is None:
+                print("For GETLASTTESTRESULT, --core is required.")
+                sys.exit(1)
+            from protocol import GetLastTestResultPacket
+            packet = GetLastTestResultPacket(core=args.core)
+        elif cmd_type == "STARTCORE":
+            if args.core is None:
+                print("For STARTCORE, --core is required.")
+                sys.exit(1)
+            from protocol import StartCorePacket
+            packet = StartCorePacket(core=args.core)
+        elif cmd_type == "GETCORESTATUS":
+            if args.core is None:
+                print("For GETCORESTATUS, --core is required.")
+                sys.exit(1)
+            from protocol import GetCoreStatusPacket
+            packet = GetCoreStatusPacket(core=args.core)
         else:
             print("Unsupported packet type.")
             sys.exit(1)
@@ -109,30 +140,36 @@ def main():
         sys.exit(1)
     
     try:
-        response = send_packet(packet, host, port)
+        responses = send_packet(packet, host, port)
     except Exception as e:
         print("Error sending packet:", e)
         sys.exit(1)
     
-    print("Response received:")
-    if isinstance(response, StatusPacket):
-        print("Type: STATUS")
-        print("Status Code:", response.status_code)
-        if response.text:
-            print("Text:", response.text)
-    elif isinstance(response, PongPacket):
-        print("Type: PONG")
-        print("Message:", response.message)
-    elif isinstance(response, UcodeResponsePacket):
-        print("Type: UCODERESPONSE")
-        print("rdtsc_diff:", response.rdtsc_diff)
-    elif isinstance(response, MsrResponsePacket):
-        print("Type: MSRRESPONSE")
-        print("EAX:", response.eax)
-        print("EDX:", response.edx)
+    if not responses:
+        print("No response received.")
     else:
-        print("Received unknown response type:")
-        print(response)
+        print("Response(s) received:")
+        for idx, response in enumerate(responses):
+            print(f"\nResponse {idx+1}:")
+            if isinstance(response, StatusPacket):
+                print("Type: STATUS")
+                print("Status Code:", response.status_code)
+                if response.text:
+                    print("Text:", response.text)
+            elif isinstance(response, PongPacket):
+                print("Type: PONG")
+                print("Message:", response.message)
+            elif isinstance(response, UcodeResponsePacket):
+                print("Type: UCODERESPONSE")
+                print("rdtsc_diff:", response.rdtsc_diff)
+                print("RAX:", response.rax)
+            elif isinstance(response, MsrResponsePacket):
+                print("Type: MSRRESPONSE")
+                print("EAX:", response.eax)
+                print("EDX:", response.edx)
+            else:
+                print("Received response of type:", response.message_type)
+                print(response)
 
 if __name__ == "__main__":
     main()

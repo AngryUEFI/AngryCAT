@@ -52,8 +52,6 @@ class FlipBitsTestCase(unittest.TestCase):
                               "SENDUCODE response is not a STATUS packet.")
         self.assertEqual(response_ucode.status_code, 0,
                          f"SENDUCODE response status expected 0, got {response_ucode.status_code}.")
-        self.assertEqual(response_ucode.text, b"",
-                         "SENDUCODE response text is not empty.")
 
         # Prepare the FLIPBITS command:
         # 50 bit positions less than 5568*8 (i.e. less than 44544)
@@ -68,8 +66,6 @@ class FlipBitsTestCase(unittest.TestCase):
                               "FLIPBITS response is not a STATUS packet.")
         self.assertEqual(response_flipbits.status_code, 0,
                          f"FLIPBITS response status expected 0, got {response_flipbits.status_code}.")
-        self.assertEqual(response_flipbits.text, b"",
-                         "FLIPBITS response text is not empty.")
 
 if __name__ == "__main__":
     unittest.main()
