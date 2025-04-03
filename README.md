@@ -182,6 +182,17 @@ These messages are sent from AngryCAT to AngryUEFI.
 ### Structure
 * 4 Byte unsigned LE target MSR
 
+## READMSRONCORE
+* ID 0x202
+* Reads the specified MSR on the specified core ID
+* Note: will not read MSRs on cores not ready to accept jobs
+* Responds with a MSRRESPONSE
+* Responds with a STATUS if the internal timeout of 100ms is reached (stuck core, even though ready)
+
+### Structure
+* 4 Byte unsigned LE target MSR
+* 8 Byte unsigned LE target core ID
+
 ## GETCORECOUNT
 * ID 0x211
 * Returns the core count of the system

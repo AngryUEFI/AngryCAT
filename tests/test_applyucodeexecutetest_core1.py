@@ -91,7 +91,7 @@ class ApplyUcodeExecuteTestCore1TestCase(unittest.TestCase):
         send_resp = send_machine_code(1, MACHINE_CODE)
         self.assertIsInstance(send_resp, StatusPacket, "SENDMACHINECODE response is not a STATUS packet")
         self.assertEqual(send_resp.status_code, 0, "SENDMACHINECODE did not succeed")
-        response = send_apply_ucode_execute_test(0, 1, 1, 100, False)
+        response = send_apply_ucode_execute_test(0, 1, 1, 0, False)
         self.assertIsInstance(response, UcodeExecuteTestResponsePacket,
                               "Expected UCODEEXECUTETESTRESPONSE from APPLYUCODEEXCUTETEST on core 1")
         self.assertEqual(response.flags, 0, "Expected flags to be 0 when timeout is 0")
@@ -104,7 +104,7 @@ class ApplyUcodeExecuteTestCore1TestCase(unittest.TestCase):
         send_resp = send_machine_code(1, MACHINE_CODE)
         self.assertIsInstance(send_resp, StatusPacket, "SENDMACHINECODE response is not a STATUS packet")
         self.assertEqual(send_resp.status_code, 0, "SENDMACHINECODE did not succeed")
-        response = send_apply_ucode_execute_test(0, 1, 1, 100, True)
+        response = send_apply_ucode_execute_test(0, 1, 1, 0, True)
         self.assertIsInstance(response, UcodeExecuteTestResponsePacket,
                               "Expected UCODEEXECUTETESTRESPONSE from APPLYUCODEEXCUTETEST on core 1 with known good update")
         self.assertEqual(response.flags, 0, "Expected flags to be 0 when timeout is 0")

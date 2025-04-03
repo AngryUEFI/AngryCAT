@@ -19,6 +19,8 @@ class PacketType(Enum):
     GETLASTTESTRESULT    = 0x152
     STARTCORE            = 0x212
     GETCORESTATUS        = 0x213
+    READMSRONCORE        = 0x202
+
     # Response Packet Types
     STATUS       = 0x80000000
     PONG         = 0x80000001
@@ -259,6 +261,29 @@ class ReadMsrPacket(Packet):
 
     def __repr__(self):
         return f"ReadMsrPacket(target_msr={self.target_msr}, control={self.control})"
+
+class ReadMsrOnCorePacket(Packet):
+    message_type = PacketType.READMSRONCORE
+    def __init__(self, *, payload: bytes = None, target_msr: int = None, target_core: int = None):
+        # Structure: 4-byte target MSR, 8-byte target core ID.
+        if payload is not None:
+            self.target_msr = struct.unpack("<I", payload[:4])[0]
+            self.target_core = struct.unpack("<Q", payload[4:12])[0]
+        elif target_msr is not None and target_core is not None:
+            self.target_msr = target_msr
+            self.target_core = target_core
+        else:
+            raise ValueError("Either payload or both target_msr and target_core must be provided.")
+    def pack(self) -> bytes:
+        payload = struct.pack("<I", self.target_msr) + struct.pack("<Q", self.target_core)
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+    def __repr__(self):
+        return f"ReadMsrOnCorePacket(target_msr=0x{self.target_msr:X}, target_core={self.target_core}, control={self.control})"
+
 
 class GetCoreCountPacket(Packet):
     message_type = PacketType.GETCORECOUNT
@@ -755,6 +780,8 @@ def parse_packet(data: bytes) -> Packet:
         pkt = CoreCountResponsePacket(payload=payload)
     elif msg_type == PacketType.CORESTATUSRESPONSE.value:
         pkt = CoreStatusResponsePacket(payload=payload)
+    elif msg_type == PacketType.READMSRONCORE.value:
+        pkt = ReadMsrOnCorePacket(payload=payload)
     else:
         raise ValueError(f"Unknown packet type 0x{msg_type:08X}.")
     pkt.major = maj
