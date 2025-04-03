@@ -174,6 +174,21 @@ These messages are sent from AngryCAT to AngryUEFI.
 ### Structure
 * 8 Byte unsigned LE core number
 
+## EXECUTEMACHINECODE
+* ID 0x153
+* Runs the machine code in specified slot
+* Executes on given core number
+* Timeout is the amount 1ms stalls core 0 waits for the job to switch to Ready state after the job was launched
+* Timeout = 0 means to wait forever, not recommended as jobs can lock up a core
+* If the job is run on core 0 timeout is disregarded
+* Responds with a UCODEEXECUTETESTRESPONSE
+    * RDTSC difference and RAX are set to 0
+
+### Structure
+* 4 Byte unsigned LE target machine code slot
+* 4 Byte unsigned LE target core number
+* 4 Byte unsigned LE timeout in roughly ms for execution, 0 for unlimited
+
 ## READMSR
 * ID 0x201
 * Reads the specified MSR

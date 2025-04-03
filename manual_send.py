@@ -16,6 +16,8 @@ from protocol import (
     StartCorePacket,
     GetCoreStatusPacket,
     SendMachineCodePacket,
+    ExecuteMachineCodePacket,
+    # Existing packets:
     Packet,
     StatusPacket,
     PongPacket,
@@ -28,11 +30,9 @@ def send_packet(packet, host, port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((host, port))
         sock.sendall(packet.pack())
-        # Read responses until the control field indicates end-of-transmission.
         while True:
             response = Packet.read_from_socket(sock)
             responses.append(response)
-            # If bit 0 of the control field is 0, then no further messages follow.
             if (response.control & 0x1) == 0:
                 break
     return responses
@@ -46,26 +46,26 @@ def main():
     parser.add_argument("--type", type=str, required=True,
                         choices=["PING", "SENDUCODE", "FLIPBITS", "APPLYUCODE", "READMSR", "REBOOT",
                                  "GETLASTTESTRESULT", "STARTCORE", "GETCORESTATUS",
-                                 "READMSRONCORE", "APPLYUCODEEXCUTETEST", "SENDMACHINECODE"],
+                                 "READMSRONCORE", "APPLYUCODEEXCUTETEST", "SENDMACHINECODE", "EXECUTEMACHINECODE"],
                         help="Type of packet to send")
     # For PING:
     parser.add_argument("--message", type=str, help="Message to send for PING")
-    # For SENDUCODE:
-    parser.add_argument("--target-slot", type=int, help="Target slot for SENDUCODE (or APPLYUCODE/SENDMACHINECODE) commands")
+    # For SENDUCODE and SENDMACHINECODE:
+    parser.add_argument("--target-slot", type=int, help="Target slot for SENDUCODE/SENDMACHINECODE (or APPLYUCODE)")
     parser.add_argument("--file", type=str, help="Path to the update file (for SENDUCODE) or machine code file (for SENDMACHINECODE)")
     # For FLIPBITS:
     parser.add_argument("--positions", type=str, help="Comma-separated bit positions for FLIPBITS")
-    # For APPLYUCODE:
+    # For APPLYUCODE and APPLYUCODEEXCUTETEST:
     parser.add_argument("--apply-known-good", action="store_true", help="Apply known good update after test update")
     # For READMSR and READMSRONCORE:
     parser.add_argument("--msr", type=str, help="MSR in hex to read (e.g. 0x10)")
-    # For GETLASTTESTRESULT, STARTCORE, GETCORESTATUS, READMSRONCORE, APPLYUCODEEXCUTETEST:
-    parser.add_argument("--core", type=int, help="Core number for GETLASTTESTRESULT, STARTCORE, GETCORESTATUS, READMSRONCORE, or APPLYUCODEEXCUTETEST")
+    # For GETLASTTESTRESULT, STARTCORE, GETCORESTATUS, READMSRONCORE, APPLYUCODEEXCUTETEST, and EXECUTEMACHINECODE:
+    parser.add_argument("--core", type=int, help="Core number for these commands")
     # For REBOOT:
     parser.add_argument("--reboot-warm", action="store_true", help="Perform a warm reboot if set (default is cold)")
     # For APPLYUCODEEXCUTETEST:
     parser.add_argument("--machine-slot", type=int, help="Target machine code slot for APPLYUCODEEXCUTETEST")
-    parser.add_argument("--timeout", type=int, default=0, help="Timeout (in ms) for APPLYUCODEEXCUTETEST (0 means unlimited)")
+    parser.add_argument("--timeout", type=int, default=0, help="Timeout (in ms) for APPLYUCODEEXCUTETEST or EXECUTEMACHINECODE (0 means unlimited)")
     
     args = parser.parse_args()
     
@@ -173,6 +173,16 @@ def main():
                 machine_code = f.read()
             from protocol import SendMachineCodePacket
             packet = SendMachineCodePacket(target_slot=args.target_slot, machine_code=machine_code)
+        elif cmd_type == "EXECUTEMACHINECODE":
+            if args.machine_slot is None or args.core is None:
+                print("For EXECUTEMACHINECODE, --machine-slot and --core are required.")
+                sys.exit(1)
+            from protocol import ExecuteMachineCodePacket
+            packet = ExecuteMachineCodePacket(
+                target_machine_code_slot=args.machine_slot,
+                target_core=args.core,
+                timeout=args.timeout
+            )
         else:
             print("Unsupported packet type.")
             sys.exit(1)
@@ -208,6 +218,13 @@ def main():
                 print("Type: MSRRESPONSE")
                 print("EAX:", response.eax)
                 print("EDX:", response.edx)
+            elif response.message_type == PacketType.UCODEEXECUTETESTRESPONSE:
+                # For UCODEEXECUTETESTRESPONSE, print all fields.
+                print("Type: UCODEEXECUTETESTRESPONSE")
+                print("rdtsc_diff:", response.rdtsc_diff)
+                print("RAX:", response.rax)
+                print("Flags:", f"{response.flags:#018x}")
+                print("Result Buffer Length:", len(response.result_buffer))
             else:
                 print("Received response of type:", response.message_type)
                 print(response)

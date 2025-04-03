@@ -20,6 +20,7 @@ class PacketType(Enum):
     STARTCORE            = 0x212
     GETCORESTATUS        = 0x213
     READMSRONCORE        = 0x202
+    EXECUTEMACHINECODE   = 0x153
 
     # Response Packet Types
     STATUS       = 0x80000000
@@ -349,6 +350,37 @@ class ApplyUcodeExecuteTestPacket(Packet):
         return (f"ApplyUcodeExecuteTestPacket(target_ucode_slot={self.target_ucode_slot}, "
                 f"target_machine_code_slot={self.target_machine_code_slot}, target_core={self.target_core}, "
                 f"timeout={self.timeout}, apply_known_good={self.apply_known_good}, control={self.control})")
+
+class ExecuteMachineCodePacket(Packet):
+    message_type = PacketType.EXECUTEMACHINECODE  # 0x153
+
+    def __init__(self, *, payload: bytes = None, target_machine_code_slot: int = None, target_core: int = None, timeout: int = None):
+        # Structure: 4-byte target machine code slot, 4-byte target core number, 4-byte timeout.
+        if payload is not None:
+            self.target_machine_code_slot = struct.unpack("<I", payload[:4])[0]
+            self.target_core = struct.unpack("<I", payload[4:8])[0]
+            self.timeout = struct.unpack("<I", payload[8:12])[0]
+        elif target_machine_code_slot is not None and target_core is not None and timeout is not None:
+            self.target_machine_code_slot = target_machine_code_slot
+            self.target_core = target_core
+            self.timeout = timeout
+        else:
+            raise ValueError("Either payload or all of target_machine_code_slot, target_core, and timeout must be provided.")
+
+    def pack(self) -> bytes:
+        payload = (struct.pack("<I", self.target_machine_code_slot) +
+                   struct.pack("<I", self.target_core) +
+                   struct.pack("<I", self.timeout))
+        header = struct.pack("<I4B I",
+                             len(payload) + 8,
+                             self.major, self.minor, self.control, self.reserved,
+                             self.message_type.value)
+        return header + payload
+
+    def __repr__(self):
+        return (f"ExecuteMachineCodePacket(target_machine_code_slot={self.target_machine_code_slot}, "
+                f"target_core={self.target_core}, timeout={self.timeout}, control={self.control})")
+
 
 class SendMachineCodePacket(Packet):
     message_type = PacketType.SENDMACHINECODE
@@ -782,6 +814,8 @@ def parse_packet(data: bytes) -> Packet:
         pkt = CoreStatusResponsePacket(payload=payload)
     elif msg_type == PacketType.READMSRONCORE.value:
         pkt = ReadMsrOnCorePacket(payload=payload)
+    elif msg_type == PacketType.EXECUTEMACHINECODE.value:
+        pkt = ExecuteMachineCodePacket(payload=payload)
     else:
         raise ValueError(f"Unknown packet type 0x{msg_type:08X}.")
     pkt.major = maj
