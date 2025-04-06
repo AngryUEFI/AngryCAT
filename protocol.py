@@ -701,22 +701,101 @@ class UcodeExecuteTestResponsePacket(Packet):
         return (f"UcodeExecuteTestResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, "
                 f"flags={self.flags:#018x}, result_buffer_length={len(self.result_buffer)}, control={self.control})")
 
+class CoreStatusFaultInfo:
+    def __init__(self, data: bytes):
+        # The CoreFaultInfo struct consists of at least 27 UINT64 values (27 * 8 = 216 bytes)
+        if len(data) < 216:
+            raise ValueError(f"Expected at least 216 bytes for CoreFaultInfo, got {len(data)}")
+        (
+            self.fault_occured,
+            self.fault_number,
+            self.error_code,
+            self.old_rip,
+            self.rax_value,
+            self.rbx_value,
+            self.rcx_value,
+            self.rdx_value,
+            self.rsi_value,
+            self.rdi_value,
+            self.rsp_value,
+            self.rbp_value,
+            self.r8_value,
+            self.r9_value,
+            self.r10_value,
+            self.r11_value,
+            self.r12_value,
+            self.r13_value,
+            self.r14_value,
+            self.r15_value,
+            self.rflags_value,
+            self.cr0_value,
+            self.cr2_value,
+            self.cr3_value,
+            self.cr4_value,
+            self.cs_value,
+            self.original_rsp
+        ) = struct.unpack("<27Q", data)
+
+    def description(self) -> str:
+        # Only print fault_number, error_code, and old_rip.
+        return (f"Fault Number: 0x{self.fault_number:016X}, "
+                f"Error Code: 0x{self.error_code:016X}, "
+                f"Old RIP: 0x{self.old_rip:016X}")
+
+    def long_description(self) -> str:
+        # Print all available register values.
+        return (
+            f"Fault Occurred: 0x{self.fault_occured:016X}\n"
+            f"Fault Number: 0x{self.fault_number:016X}\n"
+            f"Error Code: 0x{self.error_code:016X}\n"
+            f"Old RIP: 0x{self.old_rip:016X}\n"
+            f"RAX: 0x{self.rax_value:016X}\n"
+            f"RBX: 0x{self.rbx_value:016X}\n"
+            f"RCX: 0x{self.rcx_value:016X}\n"
+            f"RDX: 0x{self.rdx_value:016X}\n"
+            f"RSI: 0x{self.rsi_value:016X}\n"
+            f"RDI: 0x{self.rdi_value:016X}\n"
+            f"RSP: 0x{self.rsp_value:016X}\n"
+            f"RBP: 0x{self.rbp_value:016X}\n"
+            f"R8:  0x{self.r8_value:016X}\n"
+            f"R9:  0x{self.r9_value:016X}\n"
+            f"R10: 0x{self.r10_value:016X}\n"
+            f"R11: 0x{self.r11_value:016X}\n"
+            f"R12: 0x{self.r12_value:016X}\n"
+            f"R13: 0x{self.r13_value:016X}\n"
+            f"R14: 0x{self.r14_value:016X}\n"
+            f"R15: 0x{self.r15_value:016X}\n"
+            f"RFLAGS: 0x{self.rflags_value:016X}\n"
+            f"CR0: 0x{self.cr0_value:016X}\n"
+            f"CR2: 0x{self.cr2_value:016X}\n"
+            f"CR3: 0x{self.cr3_value:016X}\n"
+            f"CR4: 0x{self.cr4_value:016X}\n"
+            f"CS:  0x{self.cs_value:016X}\n"
+            f"Original RSP: 0x{self.original_rsp:016X}"
+        )
+
 class CoreStatusResponsePacket(Packet):
     message_type = PacketType.CORESTATUSRESPONSE
 
-    def __init__(self, *, payload: bytes = None, flags: int = None, last_heartbeat: int = None, current_rdtsc: int = None):
-        # Structure: 
-        # 8-byte unsigned LE flags,
-        # 8-byte unsigned LE last heartbeat RDTSC,
-        # 8-byte unsigned LE current RDTSC.
+    def __init__(self, *, payload: bytes = None, flags: int = None, last_heartbeat: int = None, current_rdtsc: int = None, fault_info: "CoreStatusFaultInfo" = None):
+        # Extended structure:
+        # 8 bytes flags, 8 bytes last heartbeat, 8 bytes current RDTSC,
+        # 8 bytes fault info length, then fault info bytes (if fault info length > 0).
         if payload is not None:
             self.flags = struct.unpack("<Q", payload[:8])[0]
             self.last_heartbeat = struct.unpack("<Q", payload[8:16])[0]
             self.current_rdtsc = struct.unpack("<Q", payload[16:24])[0]
+            fault_len = struct.unpack("<Q", payload[24:32])[0]
+            if fault_len > 0:
+                fault_data = payload[32:32+fault_len]
+                self.fault_info = CoreStatusFaultInfo(fault_data)
+            else:
+                self.fault_info = None
         elif flags is not None and last_heartbeat is not None and current_rdtsc is not None:
             self.flags = flags
             self.last_heartbeat = last_heartbeat
             self.current_rdtsc = current_rdtsc
+            self.fault_info = fault_info
         else:
             raise ValueError("Either payload or all of flags, last_heartbeat, and current_rdtsc must be provided.")
 
@@ -740,23 +819,21 @@ class CoreStatusResponsePacket(Packet):
     def is_locked(self):
         return bool(self.flags & 0x10)
 
+    @property
+    def faulted(self):
+        return bool(self.flags & 0x20)
+
     def pack(self) -> bytes:
-        payload = (
-            struct.pack("<Q", self.flags) +
-            struct.pack("<Q", self.last_heartbeat) +
-            struct.pack("<Q", self.current_rdtsc)
-        )
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
+        # Not needed for receiving responses.
+        raise NotImplementedError("CoreStatusResponsePacket is only used for responses.")
 
     def __repr__(self):
-        return (f"CoreStatusResponsePacket(flags={self.flags:#018x} (present={self.present}, started={self.started}, "
-                f"ready={self.ready}, job_queued={self.job_queued}, is_locked={self.is_locked}), "
-                f"last_heartbeat={self.last_heartbeat}, current_rdtsc={self.current_rdtsc}, control={self.control})")
-
+        s = (f"CoreStatusResponsePacket(flags={self.flags:#018x} (present={self.present}, started={self.started}, "
+             f"ready={self.ready}, job_queued={self.job_queued}, is_locked={self.is_locked}, faulted={self.faulted}), "
+             f"last_heartbeat={self.last_heartbeat}, current_rdtsc={self.current_rdtsc}, control={self.control})")
+        if self.fault_info:
+            s += "\nFault detected. " + self.fault_info.description()
+        return s
 
 # ======== Packet Parser ========
 

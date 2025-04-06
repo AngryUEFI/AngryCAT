@@ -23,6 +23,8 @@ from protocol import (
     PongPacket,
     UcodeResponsePacket,
     MsrResponsePacket,
+    UcodeExecuteTestResponsePacket,
+    CoreStatusResponsePacket,
 )
 
 def send_packet(packet, host, port):
@@ -218,13 +220,17 @@ def main():
                 print("Type: MSRRESPONSE")
                 print("EAX:", response.eax)
                 print("EDX:", response.edx)
-            elif response.message_type == PacketType.UCODEEXECUTETESTRESPONSE:
+            elif isinstance(response, UcodeExecuteTestResponsePacket):
                 # For UCODEEXECUTETESTRESPONSE, print all fields.
                 print("Type: UCODEEXECUTETESTRESPONSE")
                 print("rdtsc_diff:", response.rdtsc_diff)
                 print("RAX:", response.rax)
                 print("Flags:", f"{response.flags:#018x}")
                 print("Result Buffer Length:", len(response.result_buffer))
+            elif isinstance(response, CoreStatusResponsePacket):
+                print("Received response of type:", response.message_type)
+                print(response)
+                print(response.fault_info.long_description())
             else:
                 print("Received response of type:", response.message_type)
                 print(response)

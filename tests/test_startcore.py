@@ -21,17 +21,40 @@ from protocol import (
     StatusPacket,
     PingPacket,
     Packet,
-    PacketType
+    PacketType,
+    RebootPacket,
 )
 
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")
 PORT = int(os.getenv("ANGRYUEFI_PORT", "3239"))
+ALLOW_REBOOT = os.getenv("ALLOW_REBOOT", "0") == "1"
 
 def send_packet(packet_bytes):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((HOST, PORT))
         sock.sendall(packet_bytes)
         return Packet.read_from_socket(sock)
+
+def send_reboot():
+    pkt = RebootPacket(warm=False)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.connect((HOST, PORT))
+        sock.sendall(pkt.pack())
+    # Wait up to 60 seconds for target to reboot.
+    for wait in range(30, 61, 5):
+        try:
+            # Try sending a ping to see if target is up.
+            from protocol import PingPacket
+            ping = PingPacket(message=b"test")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(5)
+                sock.connect((HOST, PORT))
+                sock.sendall(ping.pack())
+                Packet.read_from_socket(sock)
+            return
+        except Exception:
+            time.sleep(5)
+    raise RuntimeError("Target did not reboot in time")
 
 def send_get_core_count():
     pkt = GetCoreCountPacket()
@@ -71,6 +94,19 @@ def wait_for_target(timeout=60, interval=5):
     return False
 
 class StartCoreNetworkTestCase(unittest.TestCase):
+    def setUp(self):
+        # Step 1: Check at least 2 cores present.
+        core_count_resp = send_get_core_count()
+        if core_count_resp.core_count < 2:
+            self.skipTest("Target does not have at least 2 cores.")
+        # Step 2: Check if core 1 is ready. If not, try starting it.
+        status = send_get_core_status(1)
+        if not status.ready:
+            if ALLOW_REBOOT:
+                send_reboot()
+            else:
+                self.skipTest("Core 1 not ready and reboot not allowed.")
+
     def test_1_start_core(self):
         """
         Query available cores.

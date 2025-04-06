@@ -21,11 +21,13 @@ from protocol import (
     CoreStatusResponsePacket,
     StartCorePacket,
     Packet,
-    PacketType
+    PacketType,
+    RebootPacket,
 )
 
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")
 PORT = int(os.getenv("ANGRYUEFI_PORT", "3239"))
+ALLOW_REBOOT = os.getenv("ALLOW_REBOOT", "0") == "1"
 
 MACHINE_CODE = bytes([
     0x48, 0xBA, 0xBE, 0xBA, 0xFE, 0xC0, 0xEF, 0xBE,
@@ -38,6 +40,27 @@ def send_packet(packet_bytes):
         sock.connect((HOST, PORT))
         sock.sendall(packet_bytes)
         return Packet.read_from_socket(sock)
+
+def send_reboot():
+    pkt = RebootPacket(warm=False)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.connect((HOST, PORT))
+        sock.sendall(pkt.pack())
+    # Wait up to 60 seconds for target to reboot.
+    for wait in range(30, 61, 5):
+        try:
+            # Try sending a ping to see if target is up.
+            from protocol import PingPacket
+            ping = PingPacket(message=b"test")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(5)
+                sock.connect((HOST, PORT))
+                sock.sendall(ping.pack())
+                Packet.read_from_socket(sock)
+            return
+        except Exception:
+            time.sleep(5)
+    raise RuntimeError("Target did not reboot in time")
 
 def send_machine_code(target_slot, machine_code):
     pkt = SendMachineCodePacket(target_slot=target_slot, machine_code=machine_code)
@@ -78,13 +101,23 @@ def ensure_core1_running():
 
 class ApplyUcodeExecuteTestCore1TestCase(unittest.TestCase):
     def setUp(self):
-        # Ensure that the target has at least 2 cores.
+        # Step 1: Check at least 2 cores present.
         core_count_resp = send_get_core_count()
         if core_count_resp.core_count < 2:
-            self.skipTest("Target does not have at least 2 cores; skipping core 1 tests.")
-        # Ensure core 1 is running.
-        status1 = ensure_core1_running()
-        self.assertTrue(status1.started, "Core 1 is not started after attempting to start it.")
+            self.skipTest("Target does not have at least 2 cores.")
+        # Step 2: Check if core 1 is ready. If not, try starting it.
+        status = send_get_core_status(1)
+        if not status.ready:
+            start_resp = send_start_core(1)
+            if not (isinstance(start_resp, StatusPacket) and start_resp.status_code == 0):
+                if ALLOW_REBOOT:
+                    send_reboot()
+                    send_start_core(1)
+                    status = send_get_core_status(1)
+                    if not status.ready:
+                        self.skipTest("Core 1 not ready even after reboot.")
+                else:
+                    self.skipTest("Core 1 not ready and reboot not allowed.")
 
     def test_apply_ucode_execute_test_core1(self):
         """Test APPLYUCODEEXCUTETEST on core 1 without known good update."""

@@ -340,7 +340,7 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 ## CORESTATUSRESPONSE
 * ID 0x80000213
 * Contains the status of the requested core
-* Core 0 is the boot core and will always report (Present, Started, Ready, Not Queued)
+* Core 0 is the boot core and will always report (Present, Started, Ready, Not Queued, Not Faulted)
 * Note on timestamps: on modern CPUs this should be constant even across cores, but keep in mind that these come from two different cores
 
 ### Strucutre
@@ -352,5 +352,8 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
         * Bit 2 - Ready Bit: if set -> core is ready to accept a job, if not set -> core is running a job or hanging
         * Bit 3 - Job Queued Bit: if set -> core has a queued job, all data for the job was written, but has not picked it up yet, if not set -> core has picked up the job or job is still being written
         * Bit 4 - Context Locked Bit: if set -> context is currently locked, if not set -> context is not locked
+        * Bit 5 - Core Faulted Bit: if set -> core encountered a fault, if not set -> core did not encounter a fault; reset when a new job starts
 * 8 Byte unsigned LE last heartbeat RDTSC - when the core last updated its heartbeat field, core 0 does not regularly update this field
 * 8 Byte unsigned LE current RDTSC - RDTSC on core 0 when this resonse was generated, used as reference for requested core heartbeat
+* 8 Byte unsigned LE fault info length - number of bytes of fault info, if core did not fault (Core Faulted Bit == 0), this is also 0 and no fault info follows
+* fault info length Bytes Fault Info - raw dump of CoreFaultInfo of this core, for definitions of buffer see AngryUEFI/handlers/fault_handling.h; members are zeroed when a new job starts (if the core could recover itself)
