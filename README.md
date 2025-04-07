@@ -317,6 +317,7 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
     * 7 Byte unused
     * 1 Byte flags, Bit 0: LSB
         * Bit 0 - set if timeout was reached when waiting for execution to complete; always 0 in response to GETLASTTESTRESULT
+        * Bit 1 - set if core signaled a fault, use GETCORESTATUS to get infos on what happened
 * 8 Byte LE unsigned - length of result buffer
 * up to 1024 Bytes result buffer
 

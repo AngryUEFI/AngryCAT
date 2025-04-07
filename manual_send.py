@@ -230,7 +230,8 @@ def main():
             elif isinstance(response, CoreStatusResponsePacket):
                 print("Received response of type:", response.message_type)
                 print(response)
-                print(response.fault_info.long_description())
+                if response.fault_info is not None:
+                    print(response.fault_info.long_description())
             else:
                 print("Received response of type:", response.message_type)
                 print(response)

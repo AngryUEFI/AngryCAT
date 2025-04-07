@@ -86,7 +86,7 @@ def send_execute_machine_code(target_machine_code_slot, target_core, timeout):
     )
     return send_packet(pkt.pack())
 
-class ExecuteMachineCodeTimeoutFaultTestCase(unittest.TestCase):
+class ExecuteMachineCodeFaultTestCase(unittest.TestCase):
     def setUp(self):
         # Step 1: Check at least 2 cores present.
         core_count_resp = send_get_core_count()
@@ -112,7 +112,7 @@ class ExecuteMachineCodeTimeoutFaultTestCase(unittest.TestCase):
         if ALLOW_REBOOT:
             send_reboot()
 
-    def test_execute_machine_code_timeout_fault(self):
+    def test_execute_machine_code_fault(self):
         # Step 3: Send machine code to slot 1 with byte string [0xCC, 0xC3].
         send_resp = send_machine_code(1, MACHINE_CODE)
         self.assertIsInstance(send_resp, StatusPacket, "SENDMACHINECODE response is not a STATUS packet")
@@ -121,8 +121,8 @@ class ExecuteMachineCodeTimeoutFaultTestCase(unittest.TestCase):
         response = send_execute_machine_code(1, self.core, 100)
         self.assertIsInstance(response, UcodeExecuteTestResponsePacket,
                               "EXECUTEMACHINECODE did not return a UCODEEXECUTETESTRESPONSE")
-        # Step 5: Check that the UCODEEXECUTETESTRESPONSE has the timeout flag set (bit 0 in flags).
-        self.assertNotEqual(response.flags & 0x1, 0, "Timeout flag not set in EXECUTEMACHINECODE response")
+        # Step 5: Check that the UCODEEXECUTETESTRESPONSE has the core faulted flag set.
+        self.assertTrue(response.core_faulted, "Core faulted flag not set in EXECUTEMACHINECODE response")
         # Step 6: Send a GETCORESTATUS for the same core.
         status_resp = send_get_core_status(self.core)
         # Step 7: Verify that CORESTATUSRESPONSE signals a faulted core.

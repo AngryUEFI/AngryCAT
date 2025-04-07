@@ -667,7 +667,7 @@ class UcodeExecuteTestResponsePacket(Packet):
         # Structure:
         # 8 bytes LE unsigned - rdtsc_diff
         # 8 bytes LE unsigned - RAX
-        # 8 bytes LE unsigned - flags (only lowest byte used; bit0 set if timeout reached)
+        # 8 bytes LE unsigned - flags (only lowest byte used; bit0 set if timeout reached, bit1 set if core faulted)
         # 8 bytes LE unsigned - length of result buffer
         # up to 1024 bytes - result buffer
         if payload is not None:
@@ -697,9 +697,17 @@ class UcodeExecuteTestResponsePacket(Packet):
                              self.message_type.value)
         return header + payload
 
+    @property
+    def timeout_reached(self):
+        return bool(self.flags & 0x1)
+
+    @property
+    def core_faulted(self):
+        return bool(self.flags & 0x2)
+
     def __repr__(self):
         return (f"UcodeExecuteTestResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, "
-                f"flags={self.flags:#018x}, result_buffer_length={len(self.result_buffer)}, control={self.control})")
+                f"flags={self.flags:#018x} (timeout_reached={self.timeout_reached}, core_faulted={self.core_faulted}), result_buffer_length={len(self.result_buffer)}, control={self.control})")
 
 class CoreStatusFaultInfo:
     def __init__(self, data: bytes):
