@@ -78,6 +78,34 @@ These messages are sent from AngryCAT to AngryUEFI.
 * 4 Byte unsigned LE message length
 * Length Bytes message
 
+## GETPAGINGINFO
+* ID: 0x11
+* Requests information on the paging setup of the given core
+* Responds with one or more PAGINGINFO packets
+* Note: all memory reads are done from core 0, AngryUEFI assumes core 0 has the full address space identity mapped
+
+### Structure
+* 8 Byte - core ID
+    * if the core is not started or not present this will be rejected
+    * if the core is not ready to accept a job, the cached core CR3 value will be used
+    * if the core is ready to accept a job, the current CR3 value will be retrieved and used
+    * if the core faulted, the current core CR3 will be read from the context, but might not have been updated
+    * if the core timed out, the current core CR3 will be read from the context, but might not have been updated
+* 4 times 8 Byte - index to send
+    * indicates which entry to send from PML4, PDPT, PD and PT
+    * sending the special value 0xffff (CURRENT_TABLE) will stop traversing and send the entire current table
+    * sending the special value 0xfffe (PREVIOUS_ENTRY) will stop traversing and send the previous level's entry
+    * any value, expcept the special values, above the max limit of the structure will be rejected
+    * Examples:
+        * 0, 0xfffe, 0, 0: returns the first PML4 entry
+        * 0xffff, 0, 0, 0: returns the entire PML4
+        * 0, 0xffff, 0, 0: returns the entire first PDPT
+        * 0, 0, 0, 0: returns the first page table entry in the first page directory in the first page directory pointer table in the first PML4 entry
+        * 0, 0, 0, 1: returns the second page table entry in the first page directory in the first page directory pointer table in the first PML4 entry
+        * 0, 0, 0, 0xfffe: returns the first page directory entry in the first page directory pointer table in the first PML4 entry
+        * 0, 0, 0, 0xffff: returns all page table entries in the first page directory in the first page directory pointer table in the first PML4 entry
+        * 512, 0, 0, 0: rejected, PML4 has only 512 entries
+
 ## REBOOT
 * ID: 0x21
 * Reboots the system
@@ -284,6 +312,33 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 
 ### Structure
 * 4 Byte unsinged LE received message length
+
+## PAGINGINFO
+* ID: 0x80000011
+* Response to a GETPAGINGINFO request
+* AngryUEFI has a limit of how many entries it will include in a single packet, check the last packet bit in the metadata!
+* AngryCAT must retrieve all packets until the last packet is encountered, even if the required information was already read
+
+### Structure
+* 8 Byte flags
+    * Byte 0, Bit 0 - fresh core CR3: if 0 -> could not retrieve the current CR3 value, used cached value, if 1 -> updated CR3 value
+    * Byte 0, Bit 1 - CR3 update faulted core: if 0 -> core did not fault, if 1 -> core faulted
+    * Byte 0, Bit 2 - CR3 update timed out: if 0 -> core did not timeout, if 1 -> core timed out
+    * rest reserved
+* 8 Byte CR3 value of requested core
+* 8 Byte entry count
+* entry count amount of 16 Byte entries and entry meta data
+    * 8 Byte paging entry metadata
+        * 2 Byte position in table
+            * e.g. the first entry in the PML4 will have this set to 0
+        * 1 Byte paging structure level
+            * 1 - Page Table
+            * 2 - Page Directory
+            * 3 - Page Directory Pointer Table
+            * 4 - PML4
+        * 5 Bytes reserved
+    * 8 Byte paging entry
+    * each entry represents a single paging entry, e.g. a page table entry or a PML4 entry
 
 ## UCODERESPONSE
 * ID 0x80000141

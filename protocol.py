@@ -8,6 +8,7 @@ class PacketType(Enum):
     PING         = 0x1
     MULTIPING    = 0x2
     GETMSGSIZE   = 0x3
+    GETPAGINGINFO = 0x11
     REBOOT       = 0x21
     SENDUCODE    = 0x101
     FLIPBITS     = 0x121
@@ -26,6 +27,7 @@ class PacketType(Enum):
     STATUS        = 0x80000000
     PONG          = 0x80000001
     MSGSIZE       = 0x80000003
+    PAGINGINFO    = 0x80000011
     UCODERESPONSE = 0x80000141
     MSRRESPONSE   = 0x80000201
     UCODEEXECUTETESTRESPONSE = 0x80000151
@@ -425,6 +427,39 @@ class GetCoreStatusPacket(Packet):
     def __repr__(self):
         return f"GetCoreStatusPacket(core={self.core}, control={self.control})"
 
+class GetPagingInfoPacket(Packet):
+    message_type = PacketType.GETPAGINGINFO
+
+    def __init__(self, *, payload: bytes = None, core: int = None, indices: list[int] = None):
+        # payload: 8B core, then 4×8B indices
+        if payload is not None:
+            off = 0
+            self.core = struct.unpack("<Q", payload[off:off+8])[0]; off += 8
+            self.indices = []
+            for _ in range(4):
+                idx = struct.unpack("<Q", payload[off:off+8])[0]
+                self.indices.append(idx)
+                off += 8
+        elif core is not None and indices is not None and len(indices) == 4:
+            self.core = core
+            self.indices = indices
+        else:
+            raise ValueError("Must provide payload or (core + 4‑element indices list)")
+
+    def pack(self) -> bytes:
+        payload = struct.pack("<Q", self.core)
+        for idx in self.indices:
+            payload += struct.pack("<Q", idx)
+        hdr = struct.pack("<I4B I",
+                          len(payload) + 8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
+
+    def __repr__(self):
+        return (f"GetPagingInfoPacket(core={self.core}, "
+                f"indices={self.indices}, control={self.control})")
+
 # ======== Response Packets ========
 
 class StatusPacket(Packet):
@@ -447,7 +482,7 @@ class StatusPacket(Packet):
                           self.message_type.value)
         return hdr + payload
     def __repr__(self):
-        return f"StatusPacket(code=0x{self.status_code:X}, text={self.text.decode("utf_16_le")}, control={self.control})"
+        return f"StatusPacket(code=0x{self.status_code:X}, text={self.text}, control={self.control})"
 
 class PongPacket(Packet):
     message_type = PacketType.PONG
@@ -644,6 +679,81 @@ class CoreStatusResponsePacket(Packet):
         if self.fault_info:
             base += "\n  Fault: " + self.fault_info.description()
         return base
+
+class PagingEntry:
+    def __init__(self, raw: int, position: int, level: int):
+        self.raw = raw
+        self.position = position  # position in table
+        self.level = level        # 1=PTE,2=PDE,3=PDPT,4=PML4
+
+        # standard IA‑32e page flags:
+        self.present                = bool(raw & (1 << 0))
+        self.read_write             = bool(raw & (1 << 1))
+        self.user_supervisor        = bool(raw & (1 << 2))
+        self.page_level_write_through = bool(raw & (1 << 3))
+        self.page_level_cache_disable = bool(raw & (1 << 4))
+        self.accessed               = bool(raw & (1 << 5))
+        self.dirty                  = bool(raw & (1 << 6))
+        self.page_size              = bool(raw & (1 << 7))
+        self.global_page            = bool(raw & (1 << 8))
+
+        # physical page number
+        self.addr = raw >> 12
+
+    @property
+    def full_addr(self) -> int:
+        return self.addr << 12
+
+    def __repr__(self):
+        return (f"<PagingEntry lvl={self.level} pos={self.position} "
+                f"present={self.present} ps={self.page_size} addr=0x{self.full_addr:X}>")
+
+class PagingInfoPacket(Packet):
+    message_type = PacketType.PAGINGINFO
+
+    def __init__(self, *, payload: bytes = None, **kwargs):
+        if payload is None:
+            raise ValueError("PAGINGINFO always comes with payload")
+
+        # parse fixed header
+        off = 0
+        flags = struct.unpack("<Q", payload[off:off+8])[0]; off += 8
+        self.fresh_cr3      = bool(flags & (1 << 0))
+        self.cr3_faulted    = bool(flags & (1 << 1))
+        self.cr3_timed_out  = bool(flags & (1 << 2))
+
+        self.cr3            = struct.unpack("<Q", payload[off:off+8])[0]; off += 8
+        entry_count        = struct.unpack("<Q", payload[off:off+8])[0]; off += 8
+
+        # parse each entry
+        self.entries = []
+        for i in range(entry_count):
+            meta = payload[off:off+8]; off += 8
+            position = struct.unpack("<H", meta[:2])[0]
+            level    = meta[2]
+            # skip 5 reserved bytes
+
+            raw_entry = struct.unpack("<Q", payload[off:off+8])[0]; off += 8
+
+            pe = PagingEntry(raw_entry, position=position, level=level)
+            pe.index = position
+            self.entries.append(pe)
+
+    def __repr__(self):
+        return (f"<PagingInfoPacket(fresh_cr3={self.fresh_cr3}, "
+                f"cr3=0x{self.cr3:X}, entries={len(self.entries)}, "
+                f"control={self.control})>")
+
+
+    @classmethod
+    def collect_entries(cls, packets: list["PagingInfoPacket"]) -> list["PagingEntry"]:
+        """
+        Flatten a list of PagingInfoPacket into a single list of all PagingEntry objects.
+        """
+        entries = []
+        for pkt in packets:
+            entries.extend(pkt.entries)
+        return entries
 
 # ======== Parser & Registry ========
 

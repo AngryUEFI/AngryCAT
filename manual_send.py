@@ -159,6 +159,8 @@ def main():
         for i, r in enumerate(responses, 1):
             print(f"\n-- Response {i} --")
             print(r)
+            if r.message_type == PacketType.CORESTATUSRESPONSE and r.faulted:
+                print(r.fault_info.long_description())
 
 if __name__ == "__main__":
     main()

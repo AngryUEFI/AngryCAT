@@ -28,7 +28,7 @@ HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")
 PORT = int(os.getenv("ANGRYUEFI_PORT", "3239"))
 ALLOW_REBOOT = os.getenv("ALLOW_REBOOT", "0") == "1"
 
-# Machine code to test: two bytes [0xCC, 0xC3]
+# Machine code to test: two bytes [0xCC, 0xC3]; int 3, ret
 MACHINE_CODE = bytes([0xCC, 0xC3])
 # (The expected fault is such that the fault_number should equal 3.)
 
