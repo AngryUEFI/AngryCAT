@@ -131,6 +131,7 @@ class ExecuteMachineCodeFaultTestCase(unittest.TestCase):
         self.assertIsNotNone(status_resp.fault_info, "No fault info available in CORESTATUSRESPONSE")
         self.assertEqual(status_resp.fault_info.fault_number, 3,
                          f"Expected fault_number 3, got {status_resp.fault_info.fault_number}")
+        self.assertTrue(status_resp.ready, "Core is not ready again")
 
 if __name__ == '__main__':
     unittest.main()
