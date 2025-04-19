@@ -23,35 +23,29 @@ class PacketType(Enum):
     EXECUTEMACHINECODE   = 0x153
 
     # Response Packet Types
-    STATUS       = 0x80000000
-    PONG         = 0x80000001
-    MSGSIZE      = 0x80000003
+    STATUS        = 0x80000000
+    PONG          = 0x80000001
+    MSGSIZE       = 0x80000003
     UCODERESPONSE = 0x80000141
-    MSRRESPONSE  = 0x80000201
+    MSRRESPONSE   = 0x80000201
     UCODEEXECUTETESTRESPONSE = 0x80000151
     CORECOUNTRESPONSE        = 0x80000211
     CORESTATUSRESPONSE       = 0x80000213
 
-# Base class for all packets.
 class Packet:
-    # Default header values.
+    """Base class for all packets, with dynamic registry & multi‑message support."""
     major    = 1
     minor    = 0
-    control  = 0  # Bitfield: Bit 0: 0 means end-of-transmission; 1 means another message follows.
+    control  = 0  # Bit0: another message follows if set
     reserved = 0
 
-    # Each subclass must set its own message_type as an instance of PacketType.
     message_type: PacketType = None
 
     def pack(self) -> bytes:
-        """Return the binary representation of the packet.
-           Subclasses must override this method.
-        """
         raise NotImplementedError("Subclasses must implement pack()")
 
     @classmethod
     def read_n_bytes(cls, sock: socket.socket, n: int) -> bytes:
-        """Read exactly n bytes from the socket."""
         data = b""
         while len(data) < n:
             chunk = sock.recv(n - len(data))
@@ -62,16 +56,21 @@ class Packet:
 
     @classmethod
     def read_from_socket(cls, sock: socket.socket) -> "Packet":
-        """
-        Read a complete packet from the socket and return the corresponding Packet instance.
-        It first reads 4 bytes to determine the packet's message length, then reads the remainder
-        of the packet and parses it using parse_packet().
-        """
         header_first4 = cls.read_n_bytes(sock, 4)
         msg_len = struct.unpack("<I", header_first4)[0]
         remaining = cls.read_n_bytes(sock, msg_len)
-        full_packet = header_first4 + remaining
-        return parse_packet(full_packet)
+        return parse_packet(header_first4 + remaining)
+
+    @classmethod
+    def read_messages(cls, sock: socket.socket) -> list["Packet"]:
+        """Read until control bit0==0 (end‑of‑transmission)."""
+        msgs = []
+        while True:
+            pkt = cls.read_from_socket(sock)
+            msgs.append(pkt)
+            if (pkt.control & 0x1) == 0:
+                break
+        return msgs
 
     def __repr__(self):
         return f"<{self.__class__.__name__}>"
@@ -80,841 +79,597 @@ class Packet:
 
 class PingPacket(Packet):
     message_type = PacketType.PING
-
     def __init__(self, *, payload: bytes = None, message: bytes = None):
         if payload is not None:
-            msg_len = struct.unpack("<I", payload[:4])[0]
-            self.message = payload[4:4 + msg_len]
+            l = struct.unpack("<I", payload[:4])[0]
+            self.message = payload[4:4+l]
         elif message is not None:
             self.message = message
         else:
-            raise ValueError("Either payload or message must be provided.")
-
-    def pack(self) -> bytes:
-        msg_bytes = self.message
-        payload = struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or message")
+    def pack(self):
+        msg = self.message
+        payload = struct.pack("<I", len(msg)) + msg
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"PingPacket(message={self.message}, control={self.control})"
+        return f"PingPacket(message={self.message!r}, control={self.control})"
 
 class MultipingPacket(Packet):
     message_type = PacketType.MULTIPING
-
     def __init__(self, *, payload: bytes = None, count: int = None, message: bytes = None):
         if payload is not None:
             self.count = struct.unpack("<I", payload[:4])[0]
-            msg_len = struct.unpack("<I", payload[4:8])[0]
-            self.message = payload[8:8 + msg_len]
+            ml = struct.unpack("<I", payload[4:8])[0]
+            self.message = payload[8:8+ml]
         elif count is not None and message is not None:
-            self.count = count
-            self.message = message
+            self.count, self.message = count, message
         else:
-            raise ValueError("Either payload or both count and message must be provided.")
-
-    def pack(self) -> bytes:
-        msg_bytes = self.message
-        payload = struct.pack("<I", self.count) + struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or both count & message")
+    def pack(self):
+        msg = self.message
+        payload = struct.pack("<I", self.count) + struct.pack("<I", len(msg)) + msg
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"MultipingPacket(count={self.count}, message={self.message}, control={self.control})"
+        return f"MultipingPacket(count={self.count}, message={self.message!r}, control={self.control})"
 
 class GetMsgSizePacket(Packet):
     message_type = PacketType.GETMSGSIZE
-
     def __init__(self, *, payload: bytes = None, message: bytes = None):
         if payload is not None:
-            msg_len = struct.unpack("<I", payload[:4])[0]
-            self.message = payload[4:4 + msg_len]
+            l = struct.unpack("<I", payload[:4])[0]
+            self.message = payload[4:4+l]
         elif message is not None:
             self.message = message
         else:
-            raise ValueError("Either payload or message must be provided.")
-
-    def pack(self) -> bytes:
-        msg_bytes = self.message
-        payload = struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or message")
+    def pack(self):
+        msg = self.message
+        payload = struct.pack("<I", len(msg)) + msg
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"GetMsgSizePacket(message={self.message}, control={self.control})"
+        return f"GetMsgSizePacket(message={self.message!r}, control={self.control})"
+
+class RebootPacket(Packet):
+    message_type = PacketType.REBOOT
+    def __init__(self, *, payload: bytes = None, warm: bool = False):
+        if payload is not None:
+            opts = struct.unpack("<I", payload[:4])[0]
+            self.warm = bool(opts & 0x1)
+        else:
+            self.warm = warm
+    def pack(self):
+        flags = 1 if self.warm else 0
+        payload = struct.pack("<I", flags)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
+    def __repr__(self):
+        return f"RebootPacket(warm={self.warm}, control={self.control})"
 
 class SendUcodePacket(Packet):
     message_type = PacketType.SENDUCODE
-
     def __init__(self, *, payload: bytes = None, target_slot: int = None, ucode: bytes = None):
-        # Structure: 4-byte target slot, 4-byte ucode size, then ucode bytes.
         if payload is not None:
             self.target_slot = struct.unpack("<I", payload[:4])[0]
-            ucode_size = struct.unpack("<I", payload[4:8])[0]
-            self.ucode = payload[8:8 + ucode_size]
+            sz = struct.unpack("<I", payload[4:8])[0]
+            self.ucode = payload[8:8+sz]
         elif target_slot is not None and ucode is not None:
-            self.target_slot = target_slot
-            self.ucode = ucode
+            self.target_slot, self.ucode = target_slot, ucode
         else:
-            raise ValueError("Either payload or both target_slot and ucode must be provided.")
-
-    def pack(self) -> bytes:
-        ucode_size = len(self.ucode)
-        payload = struct.pack("<II", self.target_slot, ucode_size) + self.ucode
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or both target_slot & ucode")
+    def pack(self):
+        sz = len(self.ucode)
+        payload = struct.pack("<II", self.target_slot, sz) + self.ucode
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
         return f"SendUcodePacket(target_slot={self.target_slot}, ucode_size={len(self.ucode)}, control={self.control})"
 
 class FlipBitsPacket(Packet):
     message_type = PacketType.FLIPBITS
-
     def __init__(self, *, payload: bytes = None, source_slot: int = None, flips: list = None):
-        # Structure: 4-byte source slot, 4-byte number of flips, then array of 4-byte bit positions.
         if payload is not None:
             self.source_slot = struct.unpack("<I", payload[:4])[0]
-            num_flips = struct.unpack("<I", payload[4:8])[0]
-            self.flip_positions = []
-            for i in range(num_flips):
-                start = 8 + i * 4
-                self.flip_positions.append(struct.unpack("<I", payload[start:start+4])[0])
+            n = struct.unpack("<I", payload[4:8])[0]
+            self.flip_positions = [struct.unpack("<I", payload[8+4*i:12+4*i])[0] for i in range(n)]
         elif source_slot is not None and flips is not None:
-            self.source_slot = source_slot
-            self.flip_positions = flips
+            self.source_slot, self.flip_positions = source_slot, flips
         else:
-            raise ValueError("Either payload or both source_slot and flips must be provided.")
-
-    def pack(self) -> bytes:
-        num_flips = len(self.flip_positions)
-        payload = struct.pack("<II", self.source_slot, num_flips)
-        for pos in self.flip_positions:
-            payload += struct.pack("<I", pos)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or both source_slot & flips")
+    def pack(self):
+        payload = struct.pack("<II", self.source_slot, len(self.flip_positions))
+        for p in self.flip_positions:
+            payload += struct.pack("<I", p)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
         return f"FlipBitsPacket(source_slot={self.source_slot}, num_flips={len(self.flip_positions)}, control={self.control})"
 
 class ApplyUcodePacket(Packet):
     message_type = PacketType.APPLYUCODE
-
     def __init__(self, *, payload: bytes = None, target_slot: int = None, apply_known_good: bool = None):
-        # Structure: 4-byte target slot, 4-byte options.
-        # Bit 0 of options indicates whether to apply the known good update.
         if payload is not None:
             self.target_slot = struct.unpack("<I", payload[:4])[0]
-            options = struct.unpack("<I", payload[4:8])[0]
-            self.apply_known_good = bool(options & 0x1)
+            opts = struct.unpack("<I", payload[4:8])[0]
+            self.apply_known_good = bool(opts & 0x1)
         elif target_slot is not None and apply_known_good is not None:
-            self.target_slot = target_slot
-            self.apply_known_good = apply_known_good
+            self.target_slot, self.apply_known_good = target_slot, apply_known_good
         else:
-            raise ValueError("Either payload or both target_slot and apply_known_good must be provided.")
-
-    def pack(self) -> bytes:
-        options = 1 if self.apply_known_good else 0
-        payload = struct.pack("<II", self.target_slot, options)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or both target_slot & apply_known_good")
+    def pack(self):
+        opts = 1 if self.apply_known_good else 0
+        payload = struct.pack("<II", self.target_slot, opts)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return (f"ApplyUcodePacket(target_slot={self.target_slot}, "
-                f"apply_known_good={self.apply_known_good}, control={self.control})")
+        return f"ApplyUcodePacket(target_slot={self.target_slot}, apply_known_good={self.apply_known_good}, control={self.control})"
 
 class ReadMsrPacket(Packet):
     message_type = PacketType.READMSR
-
     def __init__(self, *, payload: bytes = None, target_msr: int = None):
-        # Structure: 4-byte target MSR.
         if payload is not None:
             self.target_msr = struct.unpack("<I", payload[:4])[0]
         elif target_msr is not None:
             self.target_msr = target_msr
         else:
-            raise ValueError("Either payload or target_msr must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or target_msr")
+    def pack(self):
         payload = struct.pack("<I", self.target_msr)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"ReadMsrPacket(target_msr={self.target_msr}, control={self.control})"
+        return f"ReadMsrPacket(target_msr=0x{self.target_msr:X}, control={self.control})"
 
 class ReadMsrOnCorePacket(Packet):
     message_type = PacketType.READMSRONCORE
     def __init__(self, *, payload: bytes = None, target_msr: int = None, target_core: int = None):
-        # Structure: 4-byte target MSR, 8-byte target core ID.
         if payload is not None:
             self.target_msr = struct.unpack("<I", payload[:4])[0]
             self.target_core = struct.unpack("<Q", payload[4:12])[0]
         elif target_msr is not None and target_core is not None:
-            self.target_msr = target_msr
-            self.target_core = target_core
+            self.target_msr, self.target_core = target_msr, target_core
         else:
-            raise ValueError("Either payload or both target_msr and target_core must be provided.")
-    def pack(self) -> bytes:
-        payload = struct.pack("<I", self.target_msr) + struct.pack("<Q", self.target_core)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
+            raise ValueError("Provide payload or both target_msr & target_core")
+    def pack(self):
+        payload = struct.pack("<I Q", self.target_msr, self.target_core)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
         return f"ReadMsrOnCorePacket(target_msr=0x{self.target_msr:X}, target_core={self.target_core}, control={self.control})"
 
-
 class GetCoreCountPacket(Packet):
     message_type = PacketType.GETCORECOUNT
-
     def __init__(self, *, payload: bytes = None):
-        # GETCORECOUNT has no payload.
-        if payload is not None:
-            # Even if payload is present, ignore it.
-            pass
-
-    def pack(self) -> bytes:
-        payload = b""
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        pass
+    def pack(self):
+        hdr = struct.pack("<I4B I",
+                          8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr
     def __repr__(self):
         return "GetCoreCountPacket()"
 
 class ApplyUcodeExecuteTestPacket(Packet):
     message_type = PacketType.APPLYUCODEEXCUTETEST
-
-    def __init__(self, *, payload: bytes = None, target_ucode_slot: int = None, target_machine_code_slot: int = None,
-                 target_core: int = None, timeout: int = None, apply_known_good: bool = None):
-        # 4 bytes: target ucode slot
-        # 4 bytes: target machine code slot
-        # 4 bytes: target core number
-        # 4 bytes: timeout (0 for unlimited)
-        # 4 bytes: options (lower byte: bit 0 = apply known good update flag)
+    def __init__(self, *, payload: bytes = None,
+                 target_ucode_slot: int = None,
+                 target_machine_code_slot: int = None,
+                 target_core: int = None,
+                 timeout: int = None,
+                 apply_known_good: bool = None):
         if payload is not None:
-            self.target_ucode_slot = struct.unpack("<I", payload[:4])[0]
-            self.target_machine_code_slot = struct.unpack("<I", payload[4:8])[0]
-            self.target_core = struct.unpack("<I", payload[8:12])[0]
-            self.timeout = struct.unpack("<I", payload[12:16])[0]
-            options = struct.unpack("<I", payload[16:20])[0]
-            self.apply_known_good = bool(options & 0x1)
-        elif (target_ucode_slot is not None and target_machine_code_slot is not None and
-              target_core is not None and timeout is not None and apply_known_good is not None):
+            a,b,c,d,e = struct.unpack("<5I", payload[:20])
+            self.target_ucode_slot, self.target_machine_code_slot, self.target_core, self.timeout, opts = a,b,c,d,e
+            self.apply_known_good = bool(opts & 0x1)
+        elif None not in (target_ucode_slot, target_machine_code_slot, target_core, timeout, apply_known_good):
             self.target_ucode_slot = target_ucode_slot
             self.target_machine_code_slot = target_machine_code_slot
             self.target_core = target_core
             self.timeout = timeout
             self.apply_known_good = apply_known_good
         else:
-            raise ValueError("Either payload or all of target_ucode_slot, target_machine_code_slot, target_core, timeout, and apply_known_good must be provided.")
-
-    def pack(self) -> bytes:
-        options = 1 if self.apply_known_good else 0
-        payload = (struct.pack("<I", self.target_ucode_slot) +
-                   struct.pack("<I", self.target_machine_code_slot) +
-                   struct.pack("<I", self.target_core) +
-                   struct.pack("<I", self.timeout) +
-                   struct.pack("<I", options))
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or all args")
+    def pack(self):
+        opts = 1 if self.apply_known_good else 0
+        payload = struct.pack("<5I",
+                              self.target_ucode_slot,
+                              self.target_machine_code_slot,
+                              self.target_core,
+                              self.timeout,
+                              opts)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return (f"ApplyUcodeExecuteTestPacket(target_ucode_slot={self.target_ucode_slot}, "
-                f"target_machine_code_slot={self.target_machine_code_slot}, target_core={self.target_core}, "
+        return (f"ApplyUcodeExecuteTestPacket(ucode_slot={self.target_ucode_slot}, "
+                f"mc_slot={self.target_machine_code_slot}, core={self.target_core}, "
                 f"timeout={self.timeout}, apply_known_good={self.apply_known_good}, control={self.control})")
 
 class ExecuteMachineCodePacket(Packet):
-    message_type = PacketType.EXECUTEMACHINECODE  # 0x153
-
-    def __init__(self, *, payload: bytes = None, target_machine_code_slot: int = None, target_core: int = None, timeout: int = None):
-        # Structure: 4-byte target machine code slot, 4-byte target core number, 4-byte timeout.
+    message_type = PacketType.EXECUTEMACHINECODE
+    def __init__(self, *, payload: bytes = None,
+                 target_machine_code_slot: int = None,
+                 target_core: int = None,
+                 timeout: int = None):
         if payload is not None:
-            self.target_machine_code_slot = struct.unpack("<I", payload[:4])[0]
-            self.target_core = struct.unpack("<I", payload[4:8])[0]
-            self.timeout = struct.unpack("<I", payload[8:12])[0]
-        elif target_machine_code_slot is not None and target_core is not None and timeout is not None:
+            self.target_machine_code_slot, self.target_core, self.timeout = struct.unpack("<3I", payload[:12])
+        elif None not in (target_machine_code_slot, target_core, timeout):
             self.target_machine_code_slot = target_machine_code_slot
             self.target_core = target_core
             self.timeout = timeout
         else:
-            raise ValueError("Either payload or all of target_machine_code_slot, target_core, and timeout must be provided.")
-
-    def pack(self) -> bytes:
-        payload = (struct.pack("<I", self.target_machine_code_slot) +
-                   struct.pack("<I", self.target_core) +
-                   struct.pack("<I", self.timeout))
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or all args")
+    def pack(self):
+        payload = struct.pack("<3I",
+                              self.target_machine_code_slot,
+                              self.target_core,
+                              self.timeout)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return (f"ExecuteMachineCodePacket(target_machine_code_slot={self.target_machine_code_slot}, "
-                f"target_core={self.target_core}, timeout={self.timeout}, control={self.control})")
-
+        return (f"ExecuteMachineCodePacket(mc_slot={self.target_machine_code_slot}, "
+                f"core={self.target_core}, timeout={self.timeout}, control={self.control})")
 
 class SendMachineCodePacket(Packet):
     message_type = PacketType.SENDMACHINECODE
-
-    def __init__(self, *, payload: bytes = None, target_slot: int = None, machine_code: bytes = None):
-        # Structure: 4-byte target slot, 4-byte machine code size, then machine code bytes.
+    def __init__(self, *, payload: bytes = None,
+                 target_slot: int = None,
+                 machine_code: bytes = None):
         if payload is not None:
             self.target_slot = struct.unpack("<I", payload[:4])[0]
-            code_size = struct.unpack("<I", payload[4:8])[0]
-            self.machine_code = payload[8:8+code_size]
-        elif target_slot is not None and machine_code is not None:
-            self.target_slot = target_slot
-            self.machine_code = machine_code
+            sz = struct.unpack("<I", payload[4:8])[0]
+            self.machine_code = payload[8:8+sz]
+        elif None not in (target_slot, machine_code):
+            self.target_slot, self.machine_code = target_slot, machine_code
         else:
-            raise ValueError("Either payload or both target_slot and machine_code must be provided.")
-
-    def pack(self) -> bytes:
-        code_size = len(self.machine_code)
-        payload = struct.pack("<II", self.target_slot, code_size) + self.machine_code
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or both target_slot & machine_code")
+    def pack(self):
+        payload = struct.pack("<II", self.target_slot, len(self.machine_code)) + self.machine_code
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"SendMachineCodePacket(target_slot={self.target_slot}, machine_code_size={len(self.machine_code)}, control={self.control})"
+        return f"SendMachineCodePacket(target_slot={self.target_slot}, code_size={len(self.machine_code)}, control={self.control})"
 
 class GetLastTestResultPacket(Packet):
-    message_type = PacketType.GETLASTTESTRESULT 
-
+    message_type = PacketType.GETLASTTESTRESULT
     def __init__(self, *, payload: bytes = None, core: int = None):
-        # Payload: 8-byte unsigned LE core number.
         if payload is not None:
             self.core = struct.unpack("<Q", payload[:8])[0]
         elif core is not None:
             self.core = core
         else:
-            raise ValueError("Either payload or core must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or core")
+    def pack(self):
         payload = struct.pack("<Q", self.core)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"GetLastTestResultPacket(core={self.core})"
+        return f"GetLastTestResultPacket(core={self.core}, control={self.control})"
 
 class StartCorePacket(Packet):
     message_type = PacketType.STARTCORE
-
     def __init__(self, *, payload: bytes = None, core: int = None):
-        # Payload: 8-byte unsigned LE core number.
         if payload is not None:
             self.core = struct.unpack("<Q", payload[:8])[0]
         elif core is not None:
             self.core = core
         else:
-            raise ValueError("Either payload or core must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or core")
+    def pack(self):
         payload = struct.pack("<Q", self.core)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"StartCorePacket(core={self.core})"
+        return f"StartCorePacket(core={self.core}, control={self.control})"
 
 class GetCoreStatusPacket(Packet):
     message_type = PacketType.GETCORESTATUS
-
     def __init__(self, *, payload: bytes = None, core: int = None):
-        # Payload: 8-byte unsigned LE core number.
         if payload is not None:
             self.core = struct.unpack("<Q", payload[:8])[0]
         elif core is not None:
             self.core = core
         else:
-            raise ValueError("Either payload or core must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or core")
+    def pack(self):
         payload = struct.pack("<Q", self.core)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"GetCoreStatusPacket(core={self.core})"
-
+        return f"GetCoreStatusPacket(core={self.core}, control={self.control})"
 
 # ======== Response Packets ========
 
 class StatusPacket(Packet):
     message_type = PacketType.STATUS
-
-    def __init__(self, *, payload: bytes = None, status_code: int = None, text: bytes = b""):
-        # Structure: 4-byte status code, 4-byte text length, then text bytes.
+    def __init__(self, *, payload: bytes = None, status_code: int = None, text: str = ""):
         if payload is not None:
             self.status_code = struct.unpack("<I", payload[:4])[0]
-            text_len = struct.unpack("<I", payload[4:8])[0]
-            self.text = payload[8:8+text_len].decode("utf_16_le") if text_len > 0 else ""
+            tl = struct.unpack("<I", payload[4:8])[0]
+            self.text = payload[8:8+tl].decode("utf_16_le") if tl else ""
         elif status_code is not None:
-            self.status_code = status_code
-            self.text = text
+            self.status_code, self.text = status_code, text
         else:
-            raise ValueError("Either payload or status_code must be provided.")
-
-    def pack(self) -> bytes:
-        text_bytes = bytes(self.text, "utf_16_le")
-        payload = struct.pack("<I", self.status_code) + struct.pack("<I", len(text_bytes)) + text_bytes
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or status_code")
+    def pack(self):
+        tb = self.text.encode("utf_16_le")
+        payload = struct.pack("<I", self.status_code) + struct.pack("<I", len(tb)) + tb
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"StatusPacket(status_code=0x{self.status_code:X}, text={self.text}, control={self.control})"
+        return f"StatusPacket(code=0x{self.status_code:X}, text={self.text.decode("utf_16_le")}, control={self.control})"
 
 class PongPacket(Packet):
     message_type = PacketType.PONG
-
     def __init__(self, *, payload: bytes = None, message: bytes = None):
-        # Structure: 4-byte message length, then message bytes.
         if payload is not None:
-            msg_len = struct.unpack("<I", payload[:4])[0]
-            self.message = payload[4:4+msg_len]
+            l = struct.unpack("<I", payload[:4])[0]
+            self.message = payload[4:4+l]
         elif message is not None:
             self.message = message
         else:
-            raise ValueError("Either payload or message must be provided.")
-
-    def pack(self) -> bytes:
-        msg_bytes = self.message
-        payload = struct.pack("<I", len(msg_bytes)) + msg_bytes
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or message")
+    def pack(self):
+        payload = struct.pack("<I", len(self.message)) + self.message
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"PongPacket(message={self.message}, control={self.control})"
+        return f"PongPacket(message={self.message.decode("utf_16_le")}, control={self.control})"
 
 class MsgSizePacket(Packet):
     message_type = PacketType.MSGSIZE
-
     def __init__(self, *, payload: bytes = None, received_length: int = None):
-        # Structure: 4-byte received message length.
         if payload is not None:
             self.received_length = struct.unpack("<I", payload[:4])[0]
         elif received_length is not None:
             self.received_length = received_length
         else:
-            raise ValueError("Either payload or received_length must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or received_length")
+    def pack(self):
         payload = struct.pack("<I", self.received_length)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
         return f"MsgSizePacket(received_length={self.received_length}, control={self.control})"
 
 class UcodeResponsePacket(Packet):
     message_type = PacketType.UCODERESPONSE
-
     def __init__(self, *, payload: bytes = None, rdtsc_diff: int = None, rax: int = None):
-        # Structure: 8-byte rdtsc difference.
+        if payload is not None:
+            self.rdtsc_diff, self.rax = struct.unpack("<QQ", payload[:16])
+        elif rdtsc_diff is not None and rax is not None:
+            self.rdtsc_diff, self.rax = rdtsc_diff, rax
+        else:
+            raise ValueError("Provide payload or both rdtsc_diff & rax")
+    def pack(self):
+        payload = struct.pack("<QQ", self.rdtsc_diff, self.rax)
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
+    def __repr__(self):
+        return f"UcodeResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax=0x{self.rax:016X}, control={self.control})"
+
+class UcodeExecuteTestResponsePacket(Packet):
+    message_type = PacketType.UCODEEXECUTETESTRESPONSE
+    def __init__(self, *, payload: bytes = None,
+                 rdtsc_diff: int = None, rax: int = None,
+                 flags: int = None, result_buffer: bytes = None):
         if payload is not None:
             self.rdtsc_diff = struct.unpack("<Q", payload[:8])[0]
-            self.rax = struct.unpack("<Q", payload[8:16])[0]
-        elif rdtsc_diff is not None and rax is not None:
-            self.rdtsc_diff = rdtsc_diff
-            self.rax = rax
+            self.rax       = struct.unpack("<Q", payload[8:16])[0]
+            self.flags     = struct.unpack("<Q", payload[16:24])[0]
+            rl = struct.unpack("<Q", payload[24:32])[0]
+            self.result_buffer = payload[32:32+rl]
+        elif None not in (rdtsc_diff, rax, flags, result_buffer):
+            self.rdtsc_diff, self.rax, self.flags, self.result_buffer = rdtsc_diff, rax, flags, result_buffer
         else:
-            raise ValueError("Either payload or rdtsc_diff must be provided.")
-
-    def pack(self) -> bytes:
-        payload = struct.pack("<QQ", self.rdtsc_diff, self.rax)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+            raise ValueError("Provide payload or all fields")
+    @property
+    def timeout_reached(self): return bool(self.flags & 0x1)
+    @property
+    def core_faulted(self):    return bool(self.flags & 0x2)
+    def pack(self):
+        rl = len(self.result_buffer)
+        payload = (
+            struct.pack("<Q", self.rdtsc_diff) +
+            struct.pack("<Q", self.rax) +
+            struct.pack("<Q", self.flags) +
+            struct.pack("<Q", rl) +
+            self.result_buffer
+        )
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"UcodeResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, control={self.control})"
+        return (f"UcodeExecuteTestResponsePacket(rdtsc_diff={self.rdtsc_diff}, "
+                f"rax=0x{self.rax:016X}, flags=0x{self.flags:016X} "
+                f"(timeout={self.timeout_reached}, faulted={self.core_faulted}), "
+                f"buffer_len={len(self.result_buffer)}, control={self.control})")
 
 class MsrResponsePacket(Packet):
     message_type = PacketType.MSRRESPONSE
-
     def __init__(self, *, payload: bytes = None, eax: int = None, edx: int = None):
-        # Structure: 4-byte EAX and 4-byte EDX.
         if payload is not None:
-            self.eax = struct.unpack("<I", payload[:4])[0]
-            self.edx = struct.unpack("<I", payload[4:8])[0]
+            self.eax, self.edx = struct.unpack("<II", payload[:8])
         elif eax is not None and edx is not None:
-            self.eax = eax
-            self.edx = edx
+            self.eax, self.edx = eax, edx
         else:
-            raise ValueError("Either payload or both eax and edx must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or both eax & edx")
+    def pack(self):
         payload = struct.pack("<II", self.eax, self.edx)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
-        return f"MsrResponsePacket(eax={self.eax}, edx={self.edx}, control={self.control})"
+        return f"MsrResponsePacket(eax=0x{self.eax:X}, edx=0x{self.edx:X}, control={self.control})"
 
-# New Response Packet: CORECOUNTRESPONSE
 class CoreCountResponsePacket(Packet):
     message_type = PacketType.CORECOUNTRESPONSE
-
     def __init__(self, *, payload: bytes = None, core_count: int = None):
-        # Structure: 8-byte unsigned little-endian core count.
         if payload is not None:
             self.core_count = struct.unpack("<Q", payload[:8])[0]
         elif core_count is not None:
             self.core_count = core_count
         else:
-            raise ValueError("Either payload or core_count must be provided.")
-
-    def pack(self) -> bytes:
+            raise ValueError("Provide payload or core_count")
+    def pack(self):
         payload = struct.pack("<Q", self.core_count)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
+        hdr = struct.pack("<I4B I",
+                          len(payload)+8,
+                          self.major, self.minor, self.control, self.reserved,
+                          self.message_type.value)
+        return hdr + payload
     def __repr__(self):
         return f"CoreCountResponsePacket(core_count={self.core_count}, control={self.control})"
 
-class RebootPacket(Packet):
-    message_type = PacketType.REBOOT
-
-    def __init__(self, *, payload: bytes = None, warm: bool = False):
-        """
-        If payload is provided, parse the 4-byte options.
-        Otherwise, use the provided 'warm' flag.
-        """
-        if payload is not None:
-            # The payload is a 4-byte unsigned little-endian integer.
-            options, = struct.unpack("<I", payload[:4])
-            # The lowest byte holds the flags; bit 0 indicates warm reboot.
-            self.warm = bool(options & 0x1)
-        else:
-            self.warm = warm
-
-    def pack(self) -> bytes:
-        # Build the payload: 4-byte LE unsigned integer.
-        # Upper 3 bytes are unused (0); lower byte: bit 0 set if warm reboot is desired.
-        flags = 1 if self.warm else 0
-        payload = struct.pack("<I", flags)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,  # payload + (metadata+msg_type)
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
-    def __repr__(self):
-        return f"RebootPacket(warm={self.warm}, control={self.control})"
-
-class UcodeExecuteTestResponsePacket(Packet):
-    message_type = PacketType.UCODEEXECUTETESTRESPONSE
-
-    def __init__(self, *, payload: bytes = None, rdtsc_diff: int = None, rax: int = None, flags: int = None, result_buffer: bytes = None):
-        # Structure:
-        # 8 bytes LE unsigned - rdtsc_diff
-        # 8 bytes LE unsigned - RAX
-        # 8 bytes LE unsigned - flags (only lowest byte used; bit0 set if timeout reached, bit1 set if core faulted)
-        # 8 bytes LE unsigned - length of result buffer
-        # up to 1024 bytes - result buffer
-        if payload is not None:
-            self.rdtsc_diff = struct.unpack("<Q", payload[:8])[0]
-            self.rax = struct.unpack("<Q", payload[8:16])[0]
-            self.flags = struct.unpack("<Q", payload[16:24])[0]
-            result_len = struct.unpack("<Q", payload[24:32])[0]
-            self.result_buffer = payload[32:32+result_len]
-        elif rdtsc_diff is not None and rax is not None and flags is not None and result_buffer is not None:
-            self.rdtsc_diff = rdtsc_diff
-            self.rax = rax
-            self.flags = flags
-            self.result_buffer = result_buffer
-        else:
-            raise ValueError("Either payload or all of rdtsc_diff, rax, flags, and result_buffer must be provided.")
-
-    def pack(self) -> bytes:
-        result_len = len(self.result_buffer)
-        payload = (struct.pack("<Q", self.rdtsc_diff) +
-                   struct.pack("<Q", self.rax) +
-                   struct.pack("<Q", self.flags) +
-                   struct.pack("<Q", result_len) +
-                   self.result_buffer)
-        header = struct.pack("<I4B I",
-                             len(payload) + 8,
-                             self.major, self.minor, self.control, self.reserved,
-                             self.message_type.value)
-        return header + payload
-
-    @property
-    def timeout_reached(self):
-        return bool(self.flags & 0x1)
-
-    @property
-    def core_faulted(self):
-        return bool(self.flags & 0x2)
-
-    def __repr__(self):
-        return (f"UcodeExecuteTestResponsePacket(rdtsc_diff={self.rdtsc_diff}, rax={self.rax:016X}, "
-                f"flags={self.flags:#018x} (timeout_reached={self.timeout_reached}, core_faulted={self.core_faulted}), result_buffer_length={len(self.result_buffer)}, control={self.control})")
-
 class CoreStatusFaultInfo:
     def __init__(self, data: bytes):
-        # The CoreFaultInfo struct consists of at least 27 UINT64 values (27 * 8 = 216 bytes)
         if len(data) < 216:
-            raise ValueError(f"Expected at least 216 bytes for CoreFaultInfo, got {len(data)}")
+            raise ValueError(f"Expected ≥216 bytes, got {len(data)}")
+        fields = struct.unpack("<27Q", data[:216])
         (
-            self.fault_occured,
-            self.fault_number,
-            self.error_code,
-            self.old_rip,
-            self.rax_value,
-            self.rbx_value,
-            self.rcx_value,
-            self.rdx_value,
-            self.rsi_value,
-            self.rdi_value,
-            self.rsp_value,
-            self.rbp_value,
-            self.r8_value,
-            self.r9_value,
-            self.r10_value,
-            self.r11_value,
-            self.r12_value,
-            self.r13_value,
-            self.r14_value,
-            self.r15_value,
-            self.rflags_value,
-            self.cr0_value,
-            self.cr2_value,
-            self.cr3_value,
-            self.cr4_value,
-            self.cs_value,
-            self.original_rsp
-        ) = struct.unpack("<27Q", data)
+            self.fault_occured, self.fault_number, self.error_code, self.old_rip,
+            self.rax_value, self.rbx_value, self.rcx_value, self.rdx_value,
+            self.rsi_value, self.rdi_value, self.rsp_value, self.rbp_value,
+            self.r8_value, self.r9_value, self.r10_value, self.r11_value,
+            self.r12_value, self.r13_value, self.r14_value, self.r15_value,
+            self.rflags_value, self.cr0_value, self.cr2_value, self.cr3_value,
+            self.cr4_value, self.cs_value, self.original_rsp
+        ) = fields
 
-    def description(self) -> str:
-        # Only print fault_number, error_code, and old_rip.
-        return (f"Fault Number: 0x{self.fault_number:016X}, "
-                f"Error Code: 0x{self.error_code:016X}, "
-                f"Old RIP: 0x{self.old_rip:016X}")
+    def description(self):
+        return (f"Fault#=0x{self.fault_number:016X}, "
+                f"Err=0x{self.error_code:016X}, RIP=0x{self.old_rip:016X}")
 
-    def long_description(self) -> str:
-        # Print all available register values.
-        return (
-            f"Fault Occurred: 0x{self.fault_occured:016X}\n"
-            f"Fault Number: 0x{self.fault_number:016X}\n"
-            f"Error Code: 0x{self.error_code:016X}\n"
-            f"Old RIP: 0x{self.old_rip:016X}\n"
-            f"RAX: 0x{self.rax_value:016X}\n"
-            f"RBX: 0x{self.rbx_value:016X}\n"
-            f"RCX: 0x{self.rcx_value:016X}\n"
-            f"RDX: 0x{self.rdx_value:016X}\n"
-            f"RSI: 0x{self.rsi_value:016X}\n"
-            f"RDI: 0x{self.rdi_value:016X}\n"
-            f"RSP: 0x{self.rsp_value:016X}\n"
-            f"RBP: 0x{self.rbp_value:016X}\n"
-            f"R8:  0x{self.r8_value:016X}\n"
-            f"R9:  0x{self.r9_value:016X}\n"
-            f"R10: 0x{self.r10_value:016X}\n"
-            f"R11: 0x{self.r11_value:016X}\n"
-            f"R12: 0x{self.r12_value:016X}\n"
-            f"R13: 0x{self.r13_value:016X}\n"
-            f"R14: 0x{self.r14_value:016X}\n"
-            f"R15: 0x{self.r15_value:016X}\n"
-            f"RFLAGS: 0x{self.rflags_value:016X}\n"
-            f"CR0: 0x{self.cr0_value:016X}\n"
-            f"CR2: 0x{self.cr2_value:016X}\n"
-            f"CR3: 0x{self.cr3_value:016X}\n"
-            f"CR4: 0x{self.cr4_value:016X}\n"
-            f"CS:  0x{self.cs_value:016X}\n"
-            f"Original RSP: 0x{self.original_rsp:016X}"
-        )
+    def long_description(self):
+        attrs = [a for a in dir(self) if a.endswith("_value") or a in ("fault_number","error_code","old_rip")]
+        return "\n".join(f"{name}: 0x{getattr(self,name):016X}" for name in attrs)
 
 class CoreStatusResponsePacket(Packet):
     message_type = PacketType.CORESTATUSRESPONSE
-
-    def __init__(self, *, payload: bytes = None, flags: int = None, last_heartbeat: int = None, current_rdtsc: int = None, fault_info: "CoreStatusFaultInfo" = None):
-        # Extended structure:
-        # 8 bytes flags, 8 bytes last heartbeat, 8 bytes current RDTSC,
-        # 8 bytes fault info length, then fault info bytes (if fault info length > 0).
+    def __init__(self, *, payload: bytes = None,
+                 flags: int = None, last_heartbeat: int = None,
+                 current_rdtsc: int = None, fault_info: CoreStatusFaultInfo = None):
         if payload is not None:
             self.flags = struct.unpack("<Q", payload[:8])[0]
             self.last_heartbeat = struct.unpack("<Q", payload[8:16])[0]
-            self.current_rdtsc = struct.unpack("<Q", payload[16:24])[0]
-            fault_len = struct.unpack("<Q", payload[24:32])[0]
-            if fault_len > 0:
-                fault_data = payload[32:32+fault_len]
-                self.fault_info = CoreStatusFaultInfo(fault_data)
-            else:
-                self.fault_info = None
-        elif flags is not None and last_heartbeat is not None and current_rdtsc is not None:
-            self.flags = flags
-            self.last_heartbeat = last_heartbeat
-            self.current_rdtsc = current_rdtsc
-            self.fault_info = fault_info
+            self.current_rdtsc  = struct.unpack("<Q", payload[16:24])[0]
+            fl = struct.unpack("<Q", payload[24:32])[0]
+            self.fault_info = CoreStatusFaultInfo(payload[32:32+fl]) if fl else None
+        elif None not in (flags, last_heartbeat, current_rdtsc):
+            self.flags, self.last_heartbeat, self.current_rdtsc, self.fault_info = flags, last_heartbeat, current_rdtsc, fault_info
         else:
-            raise ValueError("Either payload or all of flags, last_heartbeat, and current_rdtsc must be provided.")
-
+            raise ValueError("Provide payload or flags+heartbeat+rdtsc")
     @property
-    def present(self):
-        return bool(self.flags & 0x1)
-
+    def present(self):    return bool(self.flags & 0x1)
     @property
-    def started(self):
-        return bool(self.flags & 0x2)
-
+    def started(self):    return bool(self.flags & 0x2)
     @property
-    def ready(self):
-        return bool(self.flags & 0x4)
-
+    def ready(self):      return bool(self.flags & 0x4)
     @property
-    def job_queued(self):
-        return bool(self.flags & 0x8)
-
+    def job_queued(self): return bool(self.flags & 0x8)
     @property
-    def is_locked(self):
-        return bool(self.flags & 0x10)
-
+    def is_locked(self):  return bool(self.flags & 0x10)
     @property
-    def faulted(self):
-        return bool(self.flags & 0x20)
-
-    def pack(self) -> bytes:
-        # Not needed for receiving responses.
-        raise NotImplementedError("CoreStatusResponsePacket is only used for responses.")
-
+    def faulted(self):    return bool(self.flags & 0x20)
+    def pack(self):
+        raise NotImplementedError("For responses only")
     def __repr__(self):
-        s = (f"CoreStatusResponsePacket(flags={self.flags:#018x} (present={self.present}, started={self.started}, "
-             f"ready={self.ready}, job_queued={self.job_queued}, is_locked={self.is_locked}, faulted={self.faulted}), "
-             f"last_heartbeat={self.last_heartbeat}, current_rdtsc={self.current_rdtsc}, control={self.control})")
+        base = (f"CoreStatusResponsePacket(flags=0x{self.flags:016X} "
+                f"(present={self.present},started={self.started},ready={self.ready},"
+                f"queued={self.job_queued},locked={self.is_locked},faulted={self.faulted}), "
+                f"hb={self.last_heartbeat}, rdtsc={self.current_rdtsc}, control={self.control})")
         if self.fault_info:
-            s += "\nFault detected. " + self.fault_info.description()
-        return s
+            base += "\n  Fault: " + self.fault_info.description()
+        return base
 
-# ======== Packet Parser ========
+# ======== Parser & Registry ========
 
 def parse_packet(data: bytes) -> Packet:
     if len(data) < 12:
-        raise ValueError("Data too short to be a valid packet.")
+        raise ValueError("Data too short for valid packet")
     msg_len, maj, mino, ctrl, res, msg_type = struct.unpack("<I4B I", data[:12])
-    total_len = 4 + msg_len
-    if len(data) != total_len:
-        raise ValueError(f"Data length mismatch: expected {total_len} bytes, got {len(data)} bytes.")
+    if len(data) != 4 + msg_len:
+        raise ValueError(f"Length mismatch (got {len(data)}, expected {4+msg_len})")
     payload = data[12:]
-    if msg_type == PacketType.PING.value:
-        pkt = PingPacket(payload=payload)
-    elif msg_type == PacketType.MULTIPING.value:
-        pkt = MultipingPacket(payload=payload)
-    elif msg_type == PacketType.GETMSGSIZE.value:
-        pkt = GetMsgSizePacket(payload=payload)
-    elif msg_type == PacketType.SENDUCODE.value:
-        pkt = SendUcodePacket(payload=payload)
-    elif msg_type == PacketType.FLIPBITS.value:
-        pkt = FlipBitsPacket(payload=payload)
-    elif msg_type == PacketType.APPLYUCODE.value:
-        pkt = ApplyUcodePacket(payload=payload)
-    elif msg_type == PacketType.READMSR.value:
-        pkt = ReadMsrPacket(payload=payload)
-    elif msg_type == PacketType.REBOOT.value:
-        pkt = RebootPacket(payload=payload)
-    elif msg_type == PacketType.APPLYUCODEEXCUTETEST.value:
-        pkt = ApplyUcodeExecuteTestPacket(payload=payload)
-    elif msg_type == PacketType.SENDMACHINECODE.value:
-        pkt = SendMachineCodePacket(payload=payload)
-    elif msg_type == PacketType.GETCORECOUNT.value:
-        pkt = GetCoreCountPacket(payload=payload)
-    elif msg_type == PacketType.GETLASTTESTRESULT.value:
-        pkt = GetLastTestResultPacket(payload=payload)
-    elif msg_type == PacketType.STARTCORE.value:
-        pkt = StartCorePacket(payload=payload)
-    elif msg_type == PacketType.GETCORESTATUS.value:
-        pkt = GetCoreStatusPacket(payload=payload)
-    elif msg_type == PacketType.STATUS.value:
-        pkt = StatusPacket(payload=payload)
-    elif msg_type == PacketType.PONG.value:
-        pkt = PongPacket(payload=payload)
-    elif msg_type == PacketType.MSGSIZE.value:
-        pkt = MsgSizePacket(payload=payload)
-    elif msg_type == PacketType.UCODERESPONSE.value:
-        pkt = UcodeResponsePacket(payload=payload)
-    elif msg_type == PacketType.MSRRESPONSE.value:
-        pkt = MsrResponsePacket(payload=payload)
-    elif msg_type == PacketType.UCODEEXECUTETESTRESPONSE.value:
-        pkt = UcodeExecuteTestResponsePacket(payload=payload)
-    elif msg_type == PacketType.CORECOUNTRESPONSE.value:
-        pkt = CoreCountResponsePacket(payload=payload)
-    elif msg_type == PacketType.CORESTATUSRESPONSE.value:
-        pkt = CoreStatusResponsePacket(payload=payload)
-    elif msg_type == PacketType.READMSRONCORE.value:
-        pkt = ReadMsrOnCorePacket(payload=payload)
-    elif msg_type == PacketType.EXECUTEMACHINECODE.value:
-        pkt = ExecuteMachineCodePacket(payload=payload)
-    else:
-        raise ValueError(f"Unknown packet type 0x{msg_type:08X}.")
-    pkt.major = maj
-    pkt.minor = mino
-    pkt.control = ctrl
-    pkt.reserved = res
+    cls = PACKET_REGISTRY.get(msg_type)
+    if not cls:
+        raise ValueError(f"Unknown packet type 0x{msg_type:08X}")
+    pkt = cls(payload=payload)
+    pkt.major, pkt.minor, pkt.control, pkt.reserved = maj, mino, ctrl, res
     return pkt
 
+# dynamic registry of all Packet subclasses with a message_type
+PACKET_REGISTRY = {
+    cls.message_type.value: cls
+    for cls in Packet.__subclasses__() if getattr(cls, "message_type", None)
+}
 
-# ======== Example Usage ========
 if __name__ == "__main__":
-    # Example: Create, pack, and parse a PingPacket.
-    ping = PingPacket(message=b"Hello, AngryUEFI!")
-    data_ping = ping.pack()
-    print("Ping packet bytes:", data_ping)
-    pkt_ping = parse_packet(data_ping)
-    print("Parsed packet:", pkt_ping)
+    # quick sanity check
+    p = PingPacket(message=b"Hi")
+    data = p.pack()
+    parsed = parse_packet(data)
+    print(parsed)
