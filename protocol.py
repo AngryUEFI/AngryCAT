@@ -22,6 +22,7 @@ class PacketType(Enum):
     GETCORESTATUS        = 0x213
     READMSRONCORE        = 0x202
     EXECUTEMACHINECODE   = 0x153
+    GETIBSBUFFER         = 0x401  # Request IBS buffer from a core
 
     # Response Packet Types
     STATUS        = 0x80000000
@@ -33,6 +34,7 @@ class PacketType(Enum):
     UCODEEXECUTETESTRESPONSE = 0x80000151
     CORECOUNTRESPONSE        = 0x80000211
     CORESTATUSRESPONSE       = 0x80000213
+    IBSBUFFER               = 0x80000401  # Response containing IBS buffer data
 
 class Packet:
     """Base class for all packets, with dynamic registry & multi‑message support."""
@@ -460,6 +462,58 @@ class GetPagingInfoPacket(Packet):
         return (f"GetPagingInfoPacket(core={self.core}, "
                 f"indices={self.indices}, control={self.control})")
 
+
+class GetIbsBufferPacket(Packet):
+    message_type = PacketType.GETIBSBUFFER
+    
+    def __init__(self, *, payload: bytes = None, core_id: int = None, 
+                 start_index: int = 0, entry_count: int = 0):
+        """
+        Initialize a GETIBSBUFFER request packet.
+        
+        Args:
+            payload: Raw packet payload (if parsing from received data)
+            core_id: Core ID to get IBS buffer from
+            start_index: 0-based start index in the buffer
+            entry_count: Number of entries to retrieve (0 = all from start_index)
+        """
+        if payload is not None:
+            self.core_id = struct.unpack("<Q", payload[0:8])[0]
+            self.start_index = struct.unpack("<Q", payload[8:16])[0]
+            self.entry_count = struct.unpack("<Q", payload[16:24])[0]
+        elif core_id is not None:
+            self.core_id = core_id
+            self.start_index = start_index
+            self.entry_count = entry_count
+        else:
+            raise ValueError("Provide payload or core_id")
+            
+    def pack(self):
+        payload = struct.pack(
+            "<QQQ", 
+            self.core_id, 
+            self.start_index, 
+            self.entry_count
+        )
+        hdr = struct.pack(
+            "<I4B I",
+            len(payload) + 8,  # +8 for the header fields after length
+            self.major, 
+            self.minor, 
+            self.control, 
+            self.reserved,
+            self.message_type.value
+        )
+        return hdr + payload
+        
+    def __repr__(self):
+        return (
+            f"GetIbsBufferPacket(core_id=0x{self.core_id:x}, "
+            f"start_index={self.start_index}, entry_count={self.entry_count}, "
+            f"control={self.control})"
+        )
+
+
 # ======== Response Packets ========
 
 class StatusPacket(Packet):
@@ -641,6 +695,110 @@ class CoreStatusFaultInfo:
     def long_description(self):
         attrs = [a for a in dir(self) if a.endswith("_value") or a in ("fault_number","error_code","old_rip")]
         return "\n".join(f"{name}: 0x{getattr(self,name):016X}" for name in attrs)
+
+class IbsBufferPacket(Packet):
+    message_type = PacketType.IBSBUFFER
+    
+    def __init__(self, *, payload: bytes = None, 
+                 flags: int = 0, 
+                 total_stored_events: int = 0,
+                 max_stored_events: int = 0,
+                 entries: list[bytes] = None):
+        """
+        Initialize an IBSBUFFER response packet.
+        
+        Args:
+            payload: Raw packet payload (if parsing from received data)
+            flags: IBS buffer flags (if creating a new packet)
+            total_stored_events: Total number of events in the buffer (if creating)
+            max_stored_events: Maximum number of events the buffer can hold (if creating)
+            entries: List of IBS buffer entries as raw bytes (if creating)
+        """
+        if payload is not None:
+            # Parse the header fields
+            if len(payload) < 32:  # 8B flags + 3x8B counts = 32B
+                raise ValueError("IBS buffer packet too short for header")
+                
+            # Unpack header fields
+            self._flags = struct.unpack("<Q", payload[0:8])[0]
+            self._total_stored_events = struct.unpack("<Q", payload[8:16])[0]
+            self._max_stored_events = struct.unpack("<Q", payload[16:24])[0]
+            entry_count = struct.unpack("<Q", payload[24:32])[0]
+            
+            # Parse the entries (each entry is 16 bytes as per README)
+            entry_size = 16
+            expected_size = 32 + (entry_count * entry_size)
+            if len(payload) < expected_size:
+                raise ValueError(f"IBS buffer packet too short for {entry_count} entries")
+                
+            self.entries = [payload[32 + i*entry_size : 32 + (i+1)*entry_size] 
+                          for i in range(entry_count)]
+        else:
+            self._flags = flags
+            self._total_stored_events = total_stored_events
+            self._max_stored_events = max_stored_events
+            self.entries = entries or []
+    
+    @property
+    def flags(self) -> int:
+        """Get the IBS buffer flags."""
+        return self._flags
+        
+    @property
+    def is_ibs_initialized(self) -> bool:
+        """Check if IBS is initialized (Bit 0 of flags)."""
+        return bool(self._flags & 0x1)
+        
+    @property
+    def total_stored_events(self) -> int:
+        """Get the total number of events stored in the buffer."""
+        return self._total_stored_events
+        
+    @property
+    def max_stored_events(self) -> int:
+        """Get the maximum number of events the buffer can hold."""
+        return self._max_stored_events
+    
+    @property
+    def entry_count(self) -> int:
+        """Get the number of entries in this packet."""
+        return len(self.entries)
+            
+    def pack(self):
+        # Pack the header
+        header = struct.pack(
+            "<4Q",  # 4 unsigned 64-bit integers
+            self._flags,
+            self._total_stored_events,
+            self._max_stored_events,
+            len(self.entries)
+        )
+        
+        # Concatenate all entries
+        payload = header + b''.join(self.entries)
+        
+        # Create the packet header
+        hdr = struct.pack(
+            "<I4B I",
+            len(payload) + 8,  # +8 for the header fields after length
+            self.major, 
+            self.minor, 
+            self.control, 
+            self.reserved,
+            self.message_type.value
+        )
+        return hdr + payload
+        
+    def __repr__(self):
+        return (
+            f"IbsBufferPacket("
+            f"ibs_initialized={self.is_ibs_initialized}, "
+            f"total_stored_events={self.total_stored_events}, "
+            f"max_stored_events={self.max_stored_events}, "
+            f"entry_count={self.entry_count}, "
+            f"control={self.control})"
+        )
+
 
 class CoreStatusResponsePacket(Packet):
     message_type = PacketType.CORESTATUSRESPONSE

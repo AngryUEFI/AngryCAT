@@ -282,6 +282,19 @@ These messages are sent from AngryCAT to AngryUEFI.
 * 4 Byte unsigned LE machine code size
 * machine code bytes
 
+## GETIBSBUFFER
+* ID 0x401
+* Returns the contents of the IBS buffer on the core
+* Allows specifying the start index and how many entries to send
+* Will only send entries of the current run based on core specific tracking
+* Will send response with no entries if nothing matches the request
+* Responds with an IBSBUFFER response
+* Can respond with multiple IBSBUFFER packets, AngryCAT must consume all of them (check metadata in responses)
+
+### Structure
+* 8 Byte core ID to get IBS Buffer from
+* 8 Byte start index (0 based)
+* 8 Byte entry count, set to 0 to request all entries starting at start index
 
 # Responses
 These messages are sent from AngryUEFI to AngryCAT after receiving a request.
@@ -413,3 +426,19 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * 8 Byte unsigned LE current RDTSC - RDTSC on core 0 when this resonse was generated, used as reference for requested core heartbeat
 * 8 Byte unsigned LE fault info length - number of bytes of fault info, if core did not fault (Core Faulted Bit == 0), this is also 0 and no fault info follows
 * fault info length Bytes Fault Info - raw dump of CoreFaultInfo of this core, for definitions of buffer see AngryUEFI/handlers/fault_handling.h; members are zeroed when a new job starts (if the core could recover itself)
+
+## IBSBUFFER
+* ID 0x80000401
+* Contains the IBS buffer of the requested core
+
+### Strucutre
+* 8 Byte unsigned LE flags
+    * 7 Byte unused
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - IBS initialized, if 0 the core has not initialized IBS at all, likely because it is not supported
+* 8 Byte unsigned LE total stored events in the buffer
+* 8 Byte unsigned LE max stored events in the buffer
+* 8 Byte unsigned LE entry count
+* entry count IBS events
+    * each event is 16 Bytes long
+    * for field definitions see AngryUEFI/asr/ibs.h

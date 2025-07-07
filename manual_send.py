@@ -20,6 +20,8 @@ from protocol import (
     ApplyUcodeExecuteTestPacket,
     SendMachineCodePacket,
     ExecuteMachineCodePacket,
+    GetIbsBufferPacket,
+    IbsBufferPacket,
 )
 
 
@@ -92,6 +94,8 @@ def main():
     parser.add_argument("--reboot-warm", action="store_true")
     parser.add_argument("--machine-slot", type=int)
     parser.add_argument("--timeout", type=int, default=0)
+    parser.add_argument("--start-index", type=int, default=0)
+    parser.add_argument("--entry-count", type=int, default=0)
     args = parser.parse_args()
 
     cmd = args.type.upper()
@@ -178,6 +182,15 @@ def main():
                 target_machine_code_slot=args.machine_slot,
                 target_core=args.core,
                 timeout=args.timeout
+            )
+            
+        elif cmd == "GETIBSBUFFER":
+            if args.core is None:
+                raise ValueError("--core required")
+            pkt = GetIbsBufferPacket(
+                core_id=args.core,
+                start_index=args.start_index,
+                entry_count=args.entry_count
             )
 
         else:
