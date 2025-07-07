@@ -22,6 +22,47 @@ from protocol import (
     ExecuteMachineCodePacket,
 )
 
+
+def hexdump(data: bytes, start_address: int = 0) -> None:
+    """
+    Pretty-print a bytes object in hex-editor style, 32 bytes per line,
+    with an extra separator every 8 bytes in the hex column.
+
+    Parameters:
+    -----------
+    data : bytes
+        The data to dump.
+    start_address : int, optional
+        The address to display at the beginning of the first line (default is 0).
+    """
+    width = 32
+    group_size = 8
+    # Calculate total hex-column width:
+    #   each byte = 2 hex chars
+    #   between bytes = 1 space  → (width - 1) spaces
+    #   plus (width//group_size - 1) extra spaces to separate groups
+    hex_col_width = width * 2 + (width - 1) + (width // group_size - 1)
+
+    for offset in range(0, len(data), width):
+        chunk = data[offset : offset + width]
+
+        # build a list of two-char hex strings
+        hex_bytes = [f"{b:02X}" for b in chunk]
+        # group into sublists of length `group_size`
+        groups = [
+            hex_bytes[i : i + group_size]
+            for i in range(0, len(hex_bytes), group_size)
+        ]
+        # join bytes in each group with single spaces, then join groups with double spaces
+        hex_col = "  ".join(" ".join(g) for g in groups)
+        hex_col = hex_col.ljust(hex_col_width)
+
+        # ASCII representation: printable 32–126, else dot
+        ascii_col = "".join((chr(b) if 32 <= b < 127 else ".") for b in chunk)
+
+        print(f"{start_address + offset:08X}  {hex_col}  {ascii_col}")
+
+
 def send_packet(packet, host, port):
     """Send one request and return all response packets."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -149,6 +190,7 @@ def main():
     try:
         responses = send_packet(pkt, args.host, args.port)
     except Exception as e:
+        raise e
         print("Send error:", e)
         sys.exit(1)
 
@@ -161,6 +203,8 @@ def main():
             print(r)
             if r.message_type == PacketType.CORESTATUSRESPONSE and r.faulted:
                 print(r.fault_info.long_description())
+            if r.message_type == PacketType.UCODEEXECUTETESTRESPONSE and len(r.result_buffer) > 0:
+                hexdump(r.result_buffer)
 
 if __name__ == "__main__":
     main()

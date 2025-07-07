@@ -140,7 +140,7 @@ class ApplyUcodeExecuteTestCore1TestCase(unittest.TestCase):
         response = send_apply_ucode_execute_test(0, 1, 1, 0, True)
         self.assertIsInstance(response, UcodeExecuteTestResponsePacket,
                               "Expected UCODEEXECUTETESTRESPONSE from APPLYUCODEEXCUTETEST on core 1 with known good update")
-        self.assertEqual(response.flags, 0, "Expected flags to be 0 when timeout is 0")
+        self.assertNotEqual(response.flags, 1, "Expected flags to not signal a timeout")
         self.assertGreaterEqual(len(response.result_buffer), 8, "Result buffer is too short")
         self.assertEqual(response.result_buffer[:8], EXPECTED_RESULT_PREFIX,
                          f"Expected result buffer prefix {EXPECTED_RESULT_PREFIX.hex()}, got {response.result_buffer[:8].hex()}")

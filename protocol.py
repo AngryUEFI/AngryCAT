@@ -651,8 +651,11 @@ class CoreStatusResponsePacket(Packet):
             self.flags = struct.unpack("<Q", payload[:8])[0]
             self.last_heartbeat = struct.unpack("<Q", payload[8:16])[0]
             self.current_rdtsc  = struct.unpack("<Q", payload[16:24])[0]
-            fl = struct.unpack("<Q", payload[24:32])[0]
-            self.fault_info = CoreStatusFaultInfo(payload[32:32+fl]) if fl else None
+            if len(payload) > 24:
+                fl = struct.unpack("<Q", payload[24:32])[0]
+                self.fault_info = CoreStatusFaultInfo(payload[32:32+fl]) if fl else None
+            else:
+                self.fault_info = None
         elif None not in (flags, last_heartbeat, current_rdtsc):
             self.flags, self.last_heartbeat, self.current_rdtsc, self.fault_info = flags, last_heartbeat, current_rdtsc, fault_info
         else:
