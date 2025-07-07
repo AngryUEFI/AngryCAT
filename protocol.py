@@ -558,7 +558,8 @@ class PongPacket(Packet):
                           self.message_type.value)
         return hdr + payload
     def __repr__(self):
-        return f"PongPacket(message={self.message.decode("utf_16_le")}, control={self.control})"
+        msg = self.message.decode("utf_16_le")
+        return f"PongPacket(message={msg}, control={self.control})"
 
 class MsgSizePacket(Packet):
     message_type = PacketType.MSGSIZE
@@ -739,18 +740,19 @@ class IBSEvent:
         self.q1 = struct.unpack("<Q", data[0:8])[0]
         self.q2 = struct.unpack("<Q", data[8:16])[0]
         
-        # Parse q1 fields
-        self.phys = self.q1 & 0xFFFF_FFFF_FFFF_F  # 44 bits
-        self.microcode = bool((self.q1 >> 44) & 0x1)
-        self._data_source = (self.q1 >> 45) & 0x7  # 3 bits
-        self._size = (self.q1 >> 48) & 0xF  # 4 bits
-        self.prefetch = bool((self.q1 >> 52) & 0x1)
-        self.phys_valid = bool((self.q1 >> 53) & 0x1)
-        self.linear_valid = bool((self.q1 >> 54) & 0x1)
-        self.uncachable = bool((self.q1 >> 55) & 0x1)
-        self.store = bool((self.q1 >> 56) & 0x1)
-        self.load = bool((self.q1 >> 57) & 0x1)
-        self.valid = bool((self.q1 >> 58) & 0x1)
+        # Parse q1 fields - updated to match ibs.h structure
+        self.phys = self.q1 & 0xFFFFFFFFF  # 36 bits (was 44 bits)
+        self.microcode = bool((self.q1 >> 36) & 0x1)
+        self._data_source = (self.q1 >> 37) & 0x7  # 3 bits
+        self._size = (self.q1 >> 40) & 0xF  # 4 bits
+        self.prefetch = bool((self.q1 >> 44) & 0x1)
+        self.phys_valid = bool((self.q1 >> 45) & 0x1)
+        self.linear_valid = bool((self.q1 >> 46) & 0x1)
+        self.uncachable = bool((self.q1 >> 47) & 0x1)
+        self.store = bool((self.q1 >> 48) & 0x1)
+        self.load = bool((self.q1 >> 49) & 0x1)
+        self.valid = bool((self.q1 >> 50) & 0x1)
+        # Remaining 13 bits are reserved (shift 51-63)
         
         # q2 contains the virtual address (if valid) or upper bits of physical address
         self.virtual = self.q2
