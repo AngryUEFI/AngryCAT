@@ -2,6 +2,8 @@
 import struct
 import socket
 from enum import Enum
+from dataclasses import dataclass, field
+from typing import Optional
 
 class PacketType(Enum):
     # Request Packet Types
@@ -696,6 +698,164 @@ class CoreStatusFaultInfo:
         attrs = [a for a in dir(self) if a.endswith("_value") or a in ("fault_number","error_code","old_rip")]
         return "\n".join(f"{name}: 0x{getattr(self,name):016X}" for name in attrs)
 
+class IBSEvent:
+    """
+    Represents a single IBS (Instruction Based Sampling) event.
+    Based on the IBSEvent_s struct in ibs.h.
+    """
+    # Data source descriptions mapping
+    _DATA_SOURCE_NAMES = {
+        0: "Unknown",
+        1: "Reserved",
+        2: "OtherCoreCache",
+        3: "DRAM",
+        4: "ReservedRemoteCache",
+        5: "Reserved5",
+        6: "Reserved6",
+        7: "MMIO/Config/PCI/APIC"
+    }
+    
+    # Size field descriptions mapping
+    _SIZE_NAMES = {
+        0: "Unknown",
+        1: "1B",
+        2: "2B",
+        3: "4B",
+        4: "8B",
+        5: "16B"
+    }
+
+    def __init__(self, data: bytes):
+        """
+        Parse an IBS event from raw bytes.
+        
+        Args:
+            data: 16 bytes of raw IBS event data
+        """
+        if len(data) < 16:
+            raise ValueError(f"IBSEvent requires at least 16 bytes, got {len(data)}")
+            
+        # Unpack the two 64-bit quadwords
+        self.q1 = struct.unpack("<Q", data[0:8])[0]
+        self.q2 = struct.unpack("<Q", data[8:16])[0]
+        
+        # Parse q1 fields
+        self.phys = self.q1 & 0xFFFF_FFFF_FFFF_F  # 44 bits
+        self.microcode = bool((self.q1 >> 44) & 0x1)
+        self._data_source = (self.q1 >> 45) & 0x7  # 3 bits
+        self._size = (self.q1 >> 48) & 0xF  # 4 bits
+        self.prefetch = bool((self.q1 >> 52) & 0x1)
+        self.phys_valid = bool((self.q1 >> 53) & 0x1)
+        self.linear_valid = bool((self.q1 >> 54) & 0x1)
+        self.uncachable = bool((self.q1 >> 55) & 0x1)
+        self.store = bool((self.q1 >> 56) & 0x1)
+        self.load = bool((self.q1 >> 57) & 0x1)
+        self.valid = bool((self.q1 >> 58) & 0x1)
+        
+        # q2 contains the virtual address (if valid) or upper bits of physical address
+        self.virtual = self.q2
+        
+    @property
+    def is_load(self) -> bool:
+        """Check if this is a load operation."""
+        return self.load
+        
+    @property
+    def is_store(self) -> bool:
+        """Check if this is a store operation."""
+        return self.store
+        
+    @property
+    def is_memory_op(self) -> bool:
+        """Check if this is a memory operation (load or store)."""
+        return self.load or self.store
+        
+    @property
+    def is_alu_op(self) -> bool:
+        """Check if this is an ALU operation (not a memory operation)."""
+        return not (self.load or self.store)
+        
+    @property
+    def data_source(self) -> int:
+        """Get the raw data source value (0-7)."""
+        return self._data_source
+        
+    @property
+    def size(self) -> int:
+        """Get the raw size value (0-5)."""
+        return self._size
+        
+    @property
+    def size_name(self) -> str:
+        """Get a human-readable description of the size."""
+        return self._SIZE_NAMES.get(self._size, f"Reserved({self._size})")
+        
+    @property
+    def data_source_name(self) -> str:
+        """Get a human-readable name for the data source."""
+        return self._DATA_SOURCE_NAMES.get(self._data_source, f"Unknown({self._data_source})")
+        
+    @property
+    def physical_address(self) -> Optional[int]:
+        """
+        Get the physical address for this event.
+        Combines the phys field (upper bits) with the lower 12 bits of q2.
+        Returns None if no valid physical address is available.
+        """
+        return (self.phys << 12) | (self.q2 & 0xFFF)
+        
+    @property
+    def linear_address(self) -> Optional[int]:
+        """
+        Get the linear (virtual) address for this event.
+        This is the value of q2.
+        Returns None if no valid linear address is available.
+        """
+        return self.q2
+        
+    def __repr__(self) -> str:
+        op_type = "???"
+        if self.is_load and self.is_store:
+            op_type = "UPDATE"
+        elif self.is_load:
+            op_type = "LOAD"
+        elif self.is_store:
+            op_type = "STORE"
+        else:
+            op_type = "ALU"
+        
+        # Memory operation details
+        details = []
+        addr_str = []
+        if self.is_memory_op:
+            addrs = []
+            addrs.append(f"lin=0x{self.linear_address:016X}")
+            addrs.append(f"phys=0x{self.physical_address:016X}")
+                
+            addr_str = " ".join(addrs)
+            details.append(f"sz={self.size_name}")
+            details.append(f"src={self.data_source_name}")
+                
+        # Flags as short indicators
+        flags = []
+        if self.valid: flags.append("VA")
+        if self.linear_valid: flags.append("LV")
+        if self.phys_valid: flags.append("PV")
+        if self.microcode: flags.append("MC")
+        if self.uncachable: flags.append("UC")
+        if self.prefetch: flags.append("PF")
+        flags_str = "[" + "|".join(flags) + "]" if flags else ""
+                
+        # Combine all parts
+        parts = [f"{op_type}{flags_str}"]
+        if addr_str:
+            parts.append(addr_str)  
+        if details:
+            parts.append("(" + ", ".join(details) + ")")
+            
+        return " ".join(parts)
+
+
 class IbsBufferPacket(Packet):
     message_type = PacketType.IBSBUFFER
     
@@ -731,8 +891,11 @@ class IbsBufferPacket(Packet):
             if len(payload) < expected_size:
                 raise ValueError(f"IBS buffer packet too short for {entry_count} entries")
                 
-            self.entries = [payload[32 + i*entry_size : 32 + (i+1)*entry_size] 
-                          for i in range(entry_count)]
+            # Parse each entry into an IBSEvent object
+            self.entries = [
+                IBSEvent(payload[32 + i*entry_size : 32 + (i+1)*entry_size])
+                for i in range(entry_count)
+            ]
         else:
             self._flags = flags
             self._total_stored_events = total_stored_events

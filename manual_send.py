@@ -214,10 +214,20 @@ def main():
         for i, r in enumerate(responses, 1):
             print(f"\n-- Response {i} --")
             print(r)
+            
             if r.message_type == PacketType.CORESTATUSRESPONSE and r.faulted:
                 print(r.fault_info.long_description())
-            if r.message_type == PacketType.UCODEEXECUTETESTRESPONSE and len(r.result_buffer) > 0:
+                
+            elif r.message_type == PacketType.UCODEEXECUTETESTRESPONSE and len(r.result_buffer) > 0:
                 hexdump(r.result_buffer)
+                
+            elif r.message_type == PacketType.IBSBUFFER:               
+                if r.entries:
+                    print("\nIBS Buffer Entries:")
+                    for idx, entry in enumerate(r.entries, 1):
+                        print(f"  {idx:4d}. {entry}")
+                else:
+                    print("  No entries in response.")
 
 if __name__ == "__main__":
     main()
