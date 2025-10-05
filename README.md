@@ -296,6 +296,15 @@ These messages are sent from AngryCAT to AngryUEFI.
 * 8 Byte start index (0 based)
 * 8 Byte entry count, set to 0 to request all entries starting at start index
 
+## GETDSMBUFFER
+* ID 0x501
+* Returns the contents of the DSM buffer on the core
+* Responds with an DSM response
+* Can respond with multiple DSMBUFFER packets, AngryCAT must consume all of them (check metadata in responses)
+
+### Structure
+* 8 Byte core ID to get DSM Buffer from
+
 # Responses
 These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 
@@ -442,3 +451,18 @@ These messages are sent from AngryUEFI to AngryCAT after receiving a request.
 * entry count IBS events
     * each event is 16 Bytes long
     * for field definitions see AngryUEFI/asr/ibs.h
+
+## DSMBUFFER
+* ID 0x80000501
+* Contains the DSM buffer of the requested core
+
+### Strucutre
+* 8 Byte unsigned LE flags
+    * 7 Byte unused
+    * 1 Byte flags, Bit 0: LSB
+        * Bit 0 - DSM initialized, if 0 the core has not initialized DSM at all, likely because it is not supported
+* 8 Byte unsigned LE size of file header
+* N Byte file header, see AngryUEFI/asr/dsm.h DSM_TCB_file_header
+* file header -> num_items DSM events
+    * each event is 16 Bytes long
+    * for field definitions see dump_tcb.py

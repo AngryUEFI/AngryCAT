@@ -25,6 +25,7 @@ class PacketType(Enum):
     READMSRONCORE        = 0x202
     EXECUTEMACHINECODE   = 0x153
     GETIBSBUFFER         = 0x401  # Request IBS buffer from a core
+    GETDSMBUFFER         = 0x501
 
     # Response Packet Types
     STATUS        = 0x80000000
@@ -37,6 +38,7 @@ class PacketType(Enum):
     CORECOUNTRESPONSE        = 0x80000211
     CORESTATUSRESPONSE       = 0x80000213
     IBSBUFFER               = 0x80000401  # Response containing IBS buffer data
+    DSMBUFFER               = 0x80000501
 
 class Packet:
     """Base class for all packets, with dynamic registry & multi‑message support."""
@@ -514,6 +516,41 @@ class GetIbsBufferPacket(Packet):
             f"start_index={self.start_index}, entry_count={self.entry_count}, "
             f"control={self.control})"
         )
+
+
+class GetDsmBufferPacket(Packet):
+    message_type = PacketType.GETDSMBUFFER
+
+    def __init__(self, *, payload: bytes = None, core_id: int = None):
+        """
+        Initialize a GETDSMBUFFER request packet.
+        
+        Args:
+            payload: Raw packet payload (if parsing from received data)
+            core_id: Core ID to get DSM buffer from
+        """
+        if payload is not None:
+            self.core_id = struct.unpack("<Q", payload[0:8])[0]
+        elif core_id is not None:
+            self.core_id = core_id
+        else:
+            raise ValueError("Provide payload or core_id")
+
+    def pack(self):
+        payload = struct.pack("<Q", self.core_id)
+        hdr = struct.pack(
+            "<I4B I",
+            len(payload) + 8,  # +8 for the header fields after length
+            self.major, 
+            self.minor, 
+            self.control, 
+            self.reserved,
+            self.message_type.value
+        )
+        return hdr + payload
+
+    def __repr__(self):
+        return f"GetDsmBufferPacket(core_id=0x{self.core_id:x}, control={self.control})"
 
 
 # ======== Response Packets ========
@@ -1080,6 +1117,66 @@ class PagingInfoPacket(Packet):
         for pkt in packets:
             entries.extend(pkt.entries)
         return entries
+
+
+@dataclass
+class DSM_file_header:
+    version_info: int
+    mask: int
+    sel: int
+    types: int
+    idx_info: int
+    num_items: int
+
+    def pack(self) -> bytes:
+        return struct.pack("<6Q",
+                           self.version_info,
+                           self.mask,
+                           self.sel,
+                           self.types,
+                           self.idx_info,
+                           self.num_items)
+
+
+class DsmBufferPacket(Packet):
+    message_type = PacketType.DSMBUFFER
+
+    def __init__(self, *, payload: bytes = None, **kwargs):
+        if payload is None:
+            raise ValueError("DSMBUFFER always comes with payload")
+
+        # Read the file header length from the second u64 field
+        if len(payload) < 16:
+            raise ValueError("Payload too short to read file header length")
+        
+        file_header_length = struct.unpack("<Q", payload[8:16])[0]
+        expected_header_length = 6 * 8  # DSM_file_header has 6 u64 fields
+        
+        if file_header_length != expected_header_length:
+            raise ValueError(
+                f"File header length mismatch: expected {expected_header_length} bytes, "
+                f"but payload indicates {file_header_length} bytes"
+            )
+        
+        # Verify we have enough data for the header
+        if len(payload) < file_header_length + 2 * 8:
+            raise ValueError(
+                f"Payload too short: need {file_header_length + 2 * 8} bytes for header, "
+                f"but only have {len(payload)} bytes"
+            )
+
+        # Parse the file header
+        header_fields = struct.unpack("<6Q", payload[16:expected_header_length + 16])
+        self.header = DSM_file_header(*header_fields)
+        self.entries = payload[expected_header_length + 16:]
+
+    @property
+    def file_content(self) -> bytes:
+        return self.header.pack() + self.entries
+
+    def __repr__(self):
+        return (f"<DsmBufferPacket(header={self.header}, "
+                f"entries_len={len(self.entries)}, control={self.control})>")
 
 # ======== Parser & Registry ========
 

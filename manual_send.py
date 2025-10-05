@@ -22,6 +22,8 @@ from protocol import (
     ExecuteMachineCodePacket,
     GetIbsBufferPacket,
     IbsBufferPacket,
+    GetDsmBufferPacket,
+    DsmBufferPacket,
 )
 
 
@@ -96,6 +98,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=0)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--entry-count", type=int, default=0)
+    parser.add_argument("--dsm-output-file", type=str, help="Output file for DSMBUFFER responses")
     args = parser.parse_args()
 
     cmd = args.type.upper()
@@ -193,6 +196,11 @@ def main():
                 entry_count=args.entry_count
             )
 
+        elif cmd == "GETDSMBUFFER":
+            if args.core is None:
+                raise ValueError("--core required")
+            pkt = GetDsmBufferPacket(core_id=args.core)
+
         else:
             raise ValueError(f"Unknown type {cmd!r}")
 
@@ -228,6 +236,55 @@ def main():
                         print(f"  {idx:4d}. {entry}")
                 else:
                     print("  No entries in response.")
+
+    # Collect all DSMBUFFER packets and write combined output
+    dsm_packets = [r for r in responses if r.message_type == PacketType.DSMBUFFER]
+    if dsm_packets and args.dsm_output_file:
+        try:
+            # Collect all entries from all packets
+            all_entries = b""
+            file_header = None
+            
+            for pkt in dsm_packets:
+                if file_header is None:
+                    # Use the header from the first packet as the base
+                    file_header = pkt.header
+                all_entries += pkt.entries
+                
+                # Check if this is the last packet (control bit 0 is clear)
+                if (pkt.control & 0x1) == 0:
+                    print(f"Received last DSMBUFFER packet (total packets: {len(dsm_packets)})")
+                    break
+            
+            if file_header is None:
+                print("Error: No DSM file header found in packets")
+            else:
+                # Calculate total number of items based on entry size
+                # Assuming each entry has a fixed size, we need to determine it from the header
+                # For now, we'll update num_items based on the total data received
+                # Note: This assumes we know the entry size or can infer it
+                
+                # Create a new header with updated num_items
+                # We'll keep the original num_items from the first packet's header
+                # and write all collected entries
+                from protocol import DSM_file_header
+                import struct
+                
+                # Write the combined file: header + all entries
+                file_header.num_items = len(all_entries) // 16
+                combined_content = file_header.pack() + all_entries
+                
+                with open(args.dsm_output_file, "wb") as f:
+                    f.write(combined_content)
+                    
+                print(f"DSM buffer content written to {args.dsm_output_file}")
+                print(f"  Header: {file_header}")
+                print(f"  Total entries size: {len(all_entries)} bytes")
+                
+        except IOError as e:
+            print(f"Error writing to file: {e}")
+        except Exception as e:
+            print(f"Error processing DSM buffer: {e}")
 
 if __name__ == "__main__":
     main()
