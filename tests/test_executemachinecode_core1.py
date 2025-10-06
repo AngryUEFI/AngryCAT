@@ -11,7 +11,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from protocol import (
+from angrycat.protocol import (
     SendMachineCodePacket,
     ExecuteMachineCodePacket,
     UcodeExecuteTestResponsePacket,
@@ -82,12 +82,10 @@ def send_get_core_count():
     return resp
 
 def send_get_core_status(core):
-    from protocol import GetCoreStatusPacket
     pkt = GetCoreStatusPacket(core=core)
     return send_packet(pkt.pack())
 
 def send_start_core(core):
-    from protocol import StartCorePacket
     pkt = StartCorePacket(core=core)
     return send_packet(pkt.pack())
 

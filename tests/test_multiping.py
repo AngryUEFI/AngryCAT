@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 import os
-import sys
 import socket
 import unittest
 
-# Add parent directory to sys.path so that protocol can be imported.
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from protocol import MultipingPacket, PongPacket, Packet
+from angrycat.protocol import MultipingPacket, PongPacket, Packet
 
 # Use environment variables to allow overriding host/port, with defaults.
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")

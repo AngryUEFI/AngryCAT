@@ -20,11 +20,6 @@ def main():
     # Remove our custom args from sys.argv so that unittest doesn't get confused.
     sys.argv = [sys.argv[0]] + remaining_args
 
-    # Add parent directory to sys.path so that tests can import protocol.
-    parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-
     # Discover and run all tests in the current folder.
     loader = unittest.TestLoader()
     tests = loader.discover(start_dir=os.path.dirname(__file__), pattern="test_*.py")

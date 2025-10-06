@@ -3,28 +3,18 @@ import os
 import socket
 import struct
 import unittest
-import time
 
-# Add parent directory to sys.path so that protocol can be imported.
-import os, sys
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from protocol import (
+from angrycat.protocol import (
     SendMachineCodePacket,
     ApplyUcodeExecuteTestPacket,
-    UcodeExecuteTestResponsePacket,
     GetCoreCountPacket,
-    CoreCountResponsePacket,
     StartCorePacket,
     GetCoreStatusPacket,
-    CoreStatusResponsePacket,
     StatusPacket,
     PingPacket,
-    Packet,
     PacketType
 )
+from angrycat.protocol.base import parse_packet
 
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")
 PORT = int(os.getenv("ANGRYUEFI_PORT", "3239"))
@@ -89,7 +79,6 @@ class PersistentSocket:
             self.sock = None
 
 def parse_packet_from_bytes(data_bytes):
-    from protocol import parse_packet
     return parse_packet(data_bytes)
 
 # --- Helper functions using the persistent socket ---

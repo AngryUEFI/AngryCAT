@@ -3,14 +3,7 @@ import os
 import socket
 import unittest
 
-# Add parent directory to sys.path so that protocol can be imported.
-import sys
-import os
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from protocol import SendUcodePacket, FlipBitsPacket, StatusPacket, Packet
+from angrycat.protocol import SendUcodePacket, FlipBitsPacket, StatusPacket, Packet
 
 # Use environment variables to allow overriding host/port, with defaults.
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")

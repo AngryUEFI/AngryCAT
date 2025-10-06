@@ -5,13 +5,7 @@ import struct
 import unittest
 import time
 
-# Add parent directory to sys.path so that protocol can be imported.
-import os, sys
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-from protocol import (
+from angrycat.protocol import (
     GetCoreCountPacket,
     CoreCountResponsePacket,
     GetCoreStatusPacket,
@@ -22,7 +16,6 @@ from protocol import (
     PingPacket,
     Packet,
     PacketType,
-    RebootPacket,
 )
 
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")
@@ -44,7 +37,6 @@ def send_reboot():
     for wait in range(30, 61, 5):
         try:
             # Try sending a ping to see if target is up.
-            from protocol import PingPacket
             ping = PingPacket(message=b"test")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(5)

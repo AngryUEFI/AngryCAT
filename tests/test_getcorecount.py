@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 import os
-import sys
 import socket
 import unittest
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-from protocol import GetCoreCountPacket, CoreCountResponsePacket, Packet, parse_packet
+
+from angrycat.protocol import GetCoreCountPacket, CoreCountResponsePacket, Packet, parse_packet
 
 # Get target host and port from environment (defaults provided)
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")

@@ -10,7 +10,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from protocol import (
+from angrycat.protocol import (
     SendMachineCodePacket,
     ExecuteMachineCodePacket,
     UcodeExecuteTestResponsePacket,
@@ -40,7 +40,6 @@ def send_machine_code(target_slot, machine_code):
     return send_packet(pkt.pack())
 
 def send_execute_machine_code(target_machine_code_slot, target_core, timeout):
-    from protocol import ExecuteMachineCodePacket
     pkt = ExecuteMachineCodePacket(
         target_machine_code_slot=target_machine_code_slot,
         target_core=target_core,

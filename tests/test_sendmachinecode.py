@@ -3,13 +3,7 @@ import os
 import socket
 import unittest
 
-# Add parent directory to sys.path so that protocol can be imported.
-import sys
-import os
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-from protocol import SendMachineCodePacket, StatusPacket, Packet, parse_packet
+from angrycat.protocol import SendMachineCodePacket, StatusPacket, Packet, parse_packet
 
 # Get target host and port from environment (defaults provided)
 HOST = os.getenv("ANGRYUEFI_HOST", "127.0.0.1")
