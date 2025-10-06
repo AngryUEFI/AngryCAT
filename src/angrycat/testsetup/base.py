@@ -338,7 +338,7 @@ class TestSetup:
                 if k not in self._config:
                     self._config[k] = v
     
-    def connect(self) -> None:
+    def connect(self, allow_retry=True) -> None:
         """
         Establish connection to the test setup.
         
@@ -353,6 +353,15 @@ class TestSetup:
             self._socket.connect((self.host, self.port))
             self._transition_state(ConnectionState.CONNECTED)
             logger.info(f"Connected to {self.host}:{self.port}")
+        except ConnectionRefusedError as e:
+            self._transition_state(ConnectionState.DISCONNECTED)
+            self._socket = None
+            if allow_retry and self.auto_reboot_on_error:
+                logger.warning(f"Failed to connect: {e}. Retrying...")
+                self.reboot(False)
+                self._wait_for_ping(allow_retry=False)
+                return self.connect(allow_retry=False)
+            raise NetworkError(f"Failed to connect: {e}")
         except (socket.error, socket.timeout) as e:
             self._transition_state(ConnectionState.DISCONNECTED)
             self._socket = None
@@ -515,7 +524,7 @@ class TestSetup:
             logger.debug(f"Ping failed: {e}")
             return False
     
-    def _wait_for_ping(self) -> None:
+    def _wait_for_ping(self, allow_retry=True) -> None:
         """
         Wait for successful ping response after reboot.
         
@@ -534,7 +543,7 @@ class TestSetup:
             # Try to reconnect if not connected
             if not self.is_connected:
                 try:
-                    self.connect()
+                    self.connect(allow_retry=allow_retry)
                 except NetworkError:
                     # Not ready yet, continue waiting
                     pass
