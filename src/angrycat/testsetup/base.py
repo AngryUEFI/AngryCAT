@@ -5,6 +5,9 @@ Base classes for test setup management.
 from pathlib import Path
 from typing import Any
 
+import logging
+logger = logging.getLogger()
+
 
 class Architecture:
     """

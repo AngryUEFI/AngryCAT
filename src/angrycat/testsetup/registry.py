@@ -6,15 +6,60 @@ import os
 import sys
 import importlib.util
 from pathlib import Path
+from typing import Any
+import logging
+logger = logging.getLogger()
 
 from .base import Architecture, CpuType, TestSetup
 
+ENABLE_COLOR = sys.stderr.isatty()
+# ANSI escape codes for colors
+LEVEL_COLORS = {
+    "DEBUG": "\033[36m" if ENABLE_COLOR else "",    # Cyan
+    "INFO": "\033[32m" if ENABLE_COLOR else "",     # Green
+    "WARNING": "\033[33m" if ENABLE_COLOR else "",  # Yellow
+    "ERROR": "\033[31m" if ENABLE_COLOR else "",    # Red
+    "CRITICAL": "\033[41m" if ENABLE_COLOR else "", # Red background
+}
+RESET_COLOR = "\033[0m" if ENABLE_COLOR else ""
+
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        levelname = record.levelname
+        if levelname in LEVEL_COLORS:
+            record.levelname = f"{LEVEL_COLORS[levelname]}{levelname}{RESET_COLOR}"
+        return super().format(record)
 
 # Global registries
 _setup_registry: dict[str, TestSetup] = {}
 _cpu_type_registry: dict[str, CpuType] = {}
 _architecture_registry: dict[str, Architecture] = {}
+_global_config: dict[str, Any] = {}
 _discovery_completed: bool = False
+_logger_configured: bool = False
+
+
+def _setup_logging(color: bool = False, level: int = logging.DEBUG, reconfigure: bool = False):
+    global _logger_configured
+    if _logger_configured and not reconfigure:
+        return
+    _logger_configured = True
+    formatter = ColorFormatter(
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(module)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    if not color:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(module)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger()
+    logger.addHandler(handler)
+    logger.setLevel(level)
+
 
 
 def _get_setup_directories() -> list[Path]:
@@ -53,7 +98,7 @@ def _get_setup_directories() -> list[Path]:
                     if path.exists() and path.is_dir() and path not in directories:
                         directories.append(path)
                 except (OSError, RecursionError):
-                    print(f"Warning: Could not resolve path '{dir_path}', skipping.")
+                    logger.warning(f"Could not resolve path '{dir_path}', skipping.")
                     continue
     
     return directories
@@ -187,7 +232,7 @@ def _load_definitions_from_file(filepath: Path) -> tuple[list[TestSetup], list[C
                         pass
     
     except Exception as e:
-        print(f"Warning: Failed to load definitions from {filepath}: {e}")
+        logger.warning(f"Failed to load definitions from {filepath}: {e}")
     
     finally:
         # Clean up
@@ -195,6 +240,53 @@ def _load_definitions_from_file(filepath: Path) -> tuple[list[TestSetup], list[C
             del sys.modules[module_name]
     
     return setups, cpu_types, architectures
+
+
+def _load_config_from_file(filepath: Path) -> dict[str, Any]:
+    """
+    Load configuration from a config.py file.
+    
+    Args:
+        filepath: Path to config.py file
+        
+    Returns:
+        Dictionary of configuration values
+    """
+    config = {}
+    
+    # Load the module
+    spec = importlib.util.spec_from_file_location(f"config_{filepath.stem}", filepath)
+    if spec is None or spec.loader is None:
+        return config
+    
+    module = importlib.util.module_from_spec(spec)
+    
+    # Temporarily add to sys.modules for imports to work
+    module_name = f"_angrycat_config_{filepath.stem}"
+    sys.modules[module_name] = module
+    
+    try:
+        spec.loader.exec_module(module)
+        
+        # Look for 'config' variable
+        if hasattr(module, 'config'):
+            config_var = getattr(module, 'config')
+            if isinstance(config_var, dict):
+                config = config_var
+            else:
+                logger.warning(f"'config' in {filepath} is not a dictionary, skipping.")
+        else:
+            logger.warning(f"No 'config' variable found in {filepath}")
+    
+    except Exception as e:
+        logger.warning(f"Failed to load config from {filepath}: {e}")
+    
+    finally:
+        # Clean up
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+    
+    return config
 
 
 def discover_setups() -> None:
@@ -221,19 +313,41 @@ def discover_setups() -> None:
     # Step 1: Collect directories to search
     directories = _get_setup_directories()
     
+    # Step 1.5: Load configuration files first
+    global _global_config
+    _global_config = {}
+    for directory in directories:
+        try:
+            config_file = directory / "config.py"
+            if config_file.exists():
+                config = _load_config_from_file(config_file)
+                _global_config.update(config)
+        except (OSError, RecursionError) as e:
+            logger.warning(f"Could not load config from directory '{directory}': {e}")
+            continue
+
+    # Step 1.6: Setup logging
+    _setup_logging(
+        color=get_config("use_colors", True),
+        level=get_config("log_level", logging.WARNING),
+        reconfigure=True,
+    )
+    
     # Step 2: Scan directories for *.py files
     python_files = []
     for directory in directories:
         try:
             for py_file in directory.glob("*.py"):
-                # Exclude __init__.py and example_*
+                # Exclude __init__.py, example_*, and config.py
                 if py_file.name == "__init__.py":
                     continue
                 if py_file.name.startswith("example_"):
                     continue
+                if py_file.name == "config.py":
+                    continue
                 python_files.append(py_file)
         except (OSError, RecursionError) as e:
-            print(f"Warning: Could not process directory '{directory}': {e}")
+            logger.warning(f"Could not process directory '{directory}': {e}")
             continue
     
     # Step 3: For each file, scan for CPUs, then Architectures, then TestSetups
@@ -251,7 +365,7 @@ def discover_setups() -> None:
             all_setups.extend(setups)
             
         except Exception as e:
-            print(f"Warning: Failed to load file '{py_file}': {e}")
+            logger.warning(f"Failed to load file '{py_file}': {e}")
             continue
     
     # Step 4: Instantiate and register in order: CPUs, Architectures, TestSetups
@@ -280,7 +394,7 @@ def discover_setups() -> None:
                     )
                     cpu_type.template_update = resolved_path
             except Exception as e:
-                print(f"Warning: Could not resolve template path for {cpu_type.name}: {e}")
+                logger.warning(f"Could not resolve template path for {cpu_type.name}: {e}")
                 cpu_type.template_update = None
         
         _cpu_type_registry[cpu_type.name] = cpu_type
@@ -295,13 +409,57 @@ def discover_setups() -> None:
         try:
             setup._resolve_cpu_type()
         except ValueError as e:
-            print(f"Warning: Setup '{setup.name}' has invalid CPU type: {e}")
+            logger.warning(f"Setup '{setup.name}' has invalid CPU type: {e}")
             continue
         
         if setup.cpu_type is None:
-            print(f"Warning: Setup '{setup.name}' has no CPU type, skipping.")
+            logger.warning(f"Setup '{setup.name}' has no CPU type, skipping.")
             continue
         _setup_registry[setup.name] = setup
+
+
+def get_config(key: str, default: Any = None) -> Any:
+    """
+    Get a global configuration value by key.
+    
+    Args:
+        key: Configuration key
+        default: Default value if key not found
+        
+    Returns:
+        Configuration value or default
+    """
+    # Ensure definitions are discovered
+    if not _discovery_completed:
+        discover_setups()
+    
+    return _global_config.get(key, default)
+
+
+def get_all_config() -> dict[str, Any]:
+    """
+    Get all global configuration values.
+    
+    Returns:
+        Dictionary of all configuration values
+    """
+    # Ensure definitions are discovered
+    if not _discovery_completed:
+        discover_setups()
+    
+    return _global_config.copy()
+
+
+def set_config(key: str, value: Any) -> None:
+    """
+    Set a global configuration value.
+    
+    Args:
+        key: Configuration key
+        value: Configuration value
+    """
+    global _global_config
+    _global_config[key] = value
 
 
 def register_setup(setup: TestSetup) -> None:

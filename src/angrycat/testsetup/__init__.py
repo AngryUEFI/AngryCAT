@@ -19,6 +19,9 @@ from .registry import (
     register_cpu_type,
     get_architecture,
     register_architecture,
+    get_config,
+    get_all_config,
+    set_config,
 )
 from .architectures import (
     Zen1,
@@ -45,6 +48,10 @@ __all__ = [
     # Registry functions - Architectures
     "get_architecture",
     "register_architecture",
+    # Registry functions - Configuration
+    "get_config",
+    "get_all_config",
+    "set_config",
     # Predefined Zen architectures
     "Zen1",
     "Zen2",
