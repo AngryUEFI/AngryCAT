@@ -249,6 +249,7 @@ class TestSetup:
         self.cores_started = False
         # just a shortcut
         self._ucode_revision_msr = 0x0
+        self._cached_core_count = 0
     
     def _resolve_cpu_type(self) -> None:
         """
@@ -819,7 +820,12 @@ class TestSetup:
         if pkt.status_code != 0:
             raise ValueError(f"Status code {pkt.status_code}, message: {pkt.text}")
 
-    def get_core_count(self):
+    def get_core_count(self, force_refresh=False):
+        if force_refresh or self._cached_core_count == 0:
+            self._cached_core_count = self._get_core_count()
+        return self._cached_core_count
+
+    def _get_core_count(self):
         pkt = GetCoreCountPacket()
         self.send_packet(pkt)
 
