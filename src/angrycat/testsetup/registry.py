@@ -188,8 +188,6 @@ def _load_definitions_from_file(filepath: Path) -> tuple[list[TestSetup], list[C
         for attr_name in dir(module):
             if attr_name.startswith("_"):
                 continue
-            if attr_name.startswith("example_"):
-                continue
             
             try:
                 attr = getattr(module, attr_name)
@@ -354,15 +352,20 @@ def discover_setups() -> None:
     all_cpu_types = []
     all_architectures = []
     all_setups = []
+    cpu_type_sources = {}  # Map CPU type to source file
     
     for py_file in python_files:
         try:
             setups, cpu_types, architectures = _load_definitions_from_file(py_file)
             
-            # Collect all definitions
+            # Collect all definitions and track source files
             all_cpu_types.extend(cpu_types)
             all_architectures.extend(architectures)
             all_setups.extend(setups)
+            
+            # Track which file each CPU type came from
+            for cpu_type in cpu_types:
+                cpu_type_sources[cpu_type] = py_file
             
         except Exception as e:
             logger.warning(f"Failed to load file '{py_file}': {e}")
@@ -374,17 +377,10 @@ def discover_setups() -> None:
     for cpu_type in all_cpu_types:
         # Resolve template paths for CPU types
         if hasattr(cpu_type, '_template_update_raw') and cpu_type.template_update is None:
+            logger.debug(f"Resolving template path for {cpu_type.name}: {cpu_type._template_update_raw}")
             try:
-                # Find the source file for this CPU type
-                source_file = None
-                for py_file in python_files:
-                    try:
-                        setups, cpu_types, architectures = _load_definitions_from_file(py_file)
-                        if cpu_type in cpu_types:
-                            source_file = py_file
-                            break
-                    except Exception:
-                        continue
+                # Get the source file for this CPU type
+                source_file = cpu_type_sources.get(cpu_type)
                 
                 if source_file:
                     resolved_path = _resolve_template_path(
@@ -393,6 +389,12 @@ def discover_setups() -> None:
                         directories
                     )
                     cpu_type.template_update = resolved_path
+                    if resolved_path:
+                        logger.debug(f"Resolved template path for {cpu_type.name}: {resolved_path}")
+                    else:
+                        logger.warning(f"Could not resolve template path for {cpu_type.name}: file not found")
+                else:
+                    logger.warning(f"Could not resolve template path for {cpu_type.name}: source file not found")
             except Exception as e:
                 logger.warning(f"Could not resolve template path for {cpu_type.name}: {e}")
                 cpu_type.template_update = None
