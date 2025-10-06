@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import socket
-import struct
-import sys
 import logging
 
-from protocol import (
+from angrycat.protocol import (
     Packet,
     PagingInfoPacket,
     GetPagingInfoPacket,
-    PagingEntry,
 )
 
 # Enable debug logging

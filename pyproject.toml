@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.scripts]
+manual_send = "angrycat.tools.manual_send:main"
+paging = "angrycat.tools.paging:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

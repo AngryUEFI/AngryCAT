@@ -13,15 +13,17 @@ Uses uv as package manager, e.g. `pacman -S uv`.
 # Development
 To run in a local dev environment:
 1. clone this repo
-2. cd AngryCAT
-3. uv pip install -e .
-4. uv run zsh
-5. python tests/run_test.py
+2. `cd AngryCAT`
+3. `uv pip install -e .`
+4. `uv run zsh`
+5. `python tests/run_test.py`
 
 # Running
-`uv run path/to/script.py --arguments --for --script.py`
+* `uv run path/to/script.py --arguments --for --script.py`
 * Not all files need extra packages, you might get away with plain python.
 * *Note* The experiments might not write fully valid json, check the end of the file and remove partial entries and add a closing `]` if needed.
+* `uv run manual_send`
+* `uv run paging`
 
 # Protocol
 

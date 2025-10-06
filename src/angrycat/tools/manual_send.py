@@ -2,9 +2,8 @@
 import argparse
 import socket
 import sys
-import os
 
-from protocol import (
+from angrycat.protocol import (
     Packet,
     PacketType,
     PingPacket,
@@ -21,9 +20,7 @@ from protocol import (
     SendMachineCodePacket,
     ExecuteMachineCodePacket,
     GetIbsBufferPacket,
-    IbsBufferPacket,
     GetDsmBufferPacket,
-    DsmBufferPacket,
 )
 
 
@@ -267,9 +264,7 @@ def main():
                 # Create a new header with updated num_items
                 # We'll keep the original num_items from the first packet's header
                 # and write all collected entries
-                from protocol import DSM_file_header
-                import struct
-                
+
                 # Write the combined file: header + all entries
                 file_header.num_items = len(all_entries) // 16
                 combined_content = file_header.pack() + all_entries
