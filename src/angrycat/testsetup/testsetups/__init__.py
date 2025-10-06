@@ -1,0 +1,1 @@
+# This file makes testsetups a package within the angrycat distribution

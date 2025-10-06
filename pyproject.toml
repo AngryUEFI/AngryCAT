@@ -16,3 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/angrycat"]
+
+[tool.hatch.build.targets.wheel.sources]
+"testsetups" = "src/angrycat/testsetup/testsetups"

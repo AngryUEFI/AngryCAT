@@ -25,6 +25,80 @@ To run in a local dev environment:
 * `uv run manual_send`
 * `uv run paging`
 
+# Test Setup Management
+
+AngryCAT includes a test setup management system for organizing and accessing test hardware.
+
+## Defining Test Setups
+
+Test setups are defined in Python files in the `testsetups/` directory. Each setup specifies:
+- **Architecture**: CPU architecture (e.g., x86_64, aarch64)
+- **CPU Type**: Specific CPU model with optional binary blob path
+- **Network Configuration**: Host and port for network communication
+- **Custom Attributes**: Instance-specific configuration options
+
+Example setup definition:
+```python
+from angrycat.testsetup import Architecture, CpuType, TestSetup
+
+# Define architecture
+x86_64 = Architecture(name="x86_64", bits=64)
+
+# Define CPU type
+ryzen = CpuType(
+    name="AMD Ryzen 9 5950X",
+    architecture=x86_64,
+    binary_blob_path="/path/to/microcode.bin"
+)
+
+# Create setup implementation
+class MySetup(TestSetup):
+    def connect(self):
+        # Implement connection logic
+        pass
+    
+    def disconnect(self):
+        pass
+    
+    def is_available(self):
+        return True
+
+# Instantiate setup
+my_setup = MySetup(
+    name="lab_machine_1",
+    cpu_type=ryzen,
+    host="192.168.1.100",
+    port=3239
+)
+```
+
+## Using Test Setups
+
+Query for setups in your tests or tools:
+```python
+from angrycat.testsetup import get_setup
+
+# Get setup by architecture
+setup = get_setup(architecture="x86_64")
+
+# Get specific setup by name
+setup = get_setup(name="lab_machine_1")
+
+# Use the setup
+setup.connect()
+# ... run tests ...
+setup.disconnect()
+```
+
+## Custom Setup Directories
+
+Add custom setup directories via environment variable:
+```bash
+export ANGRYCAT_TESTSETUP_DIRS="/path/to/custom/setups:/another/path"
+```
+
+See `testsetups/README.md` for more details.
+
 # Protocol
 
 AngryUEFI listens on a TCP port, default 3239, and receives commands from this script. This script sends a single command at a time. AngryUEFI sends back at least one message in response. AngryUEFI will never send data outside of this request/response flow. A request must be a maximum of 1MB + 12 Bytes. Response messages are up to 1412 = 1400 (Payload) + 12 (Header) Bytes (under default MTU of 1500). Text transmitted is UCS-2  unless otherwise noted due to UEFI using this encoding. For most text using python encoding `utf_16_le` should work.
