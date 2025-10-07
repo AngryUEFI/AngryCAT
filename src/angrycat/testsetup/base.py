@@ -246,7 +246,7 @@ class TestSetup:
         self.reboot_timeout = 30.0
         self.after_reboot_delay = 3.0
         self.auto_start_cores = True
-        self.cores_started = False
+        self._cores_started = False
         # just a shortcut
         self._ucode_revision_msr = 0x0
         self._cached_core_count = 0
@@ -305,13 +305,13 @@ class TestSetup:
         logger.debug(f"State transition: {old_state.name} -> {new_state.name}")
         if new_state == ConnectionState.CONNECTED:
             self._reset_blocked_cores()
-            if not self.cores_started:
+            if not self._cores_started:
                 if self.auto_start_cores:
                     self.start_all_cores()
-                self.cores_started = True
+                self._cores_started = True
         elif new_state == ConnectionState.REBOOTING:
             self._reset_blocked_cores()
-            self.cores_started = False
+            self._cores_started = False
     
     def _create_socket(self) -> socket.socket:
         """

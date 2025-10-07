@@ -10,6 +10,18 @@ Python tool to drive testing with AngryUEFI
 # Dependencies
 Uses uv as package manager, e.g. `pacman -S uv`.
 
+# Running
+* `uv run path/to/script.py --arguments --for --script.py`
+* Not all files need extra packages, you might get away with plain python.
+* *Note* The experiments might not write fully valid json, check the end of the file and remove partial entries and add a closing `]` if needed.
+* `uv run manual_send`
+* `uv run paging`
+
+Check the [TestSetup documentation](testsetup.md) for a quickstart.
+
+# Install
+TODO. For now the Dev flow below is what we use.
+
 # Development
 To run in a local dev environment:
 1. clone this repo
@@ -17,13 +29,6 @@ To run in a local dev environment:
 3. `uv pip install -e .`
 4. `uv run zsh`
 5. `python tests/run_test.py`
-
-# Running
-* `uv run path/to/script.py --arguments --for --script.py`
-* Not all files need extra packages, you might get away with plain python.
-* *Note* The experiments might not write fully valid json, check the end of the file and remove partial entries and add a closing `]` if needed.
-* `uv run manual_send`
-* `uv run paging`
 
 # Test Setup Management
 
@@ -37,58 +42,10 @@ Test setups are defined in Python files in the `testsetups/` directory. Each set
 - **Network Configuration**: Host and port for network communication
 - **Custom Attributes**: Instance-specific configuration options
 
-Example setup definition:
-```python
-from angrycat.testsetup import Architecture, CpuType, TestSetup
-
-# Define architecture
-x86_64 = Architecture(name="x86_64", bits=64)
-
-# Define CPU type
-ryzen = CpuType(
-    name="AMD Ryzen 9 5950X",
-    architecture=x86_64,
-    binary_blob_path="/path/to/microcode.bin"
-)
-
-# Create setup implementation
-class MySetup(TestSetup):
-    def connect(self):
-        # Implement connection logic
-        pass
-    
-    def disconnect(self):
-        pass
-    
-    def is_available(self):
-        return True
-
-# Instantiate setup
-my_setup = MySetup(
-    name="lab_machine_1",
-    cpu_type=ryzen,
-    host="192.168.1.100",
-    port=3239
-)
-```
 
 ## Using Test Setups
 
-Query for setups in your tests or tools:
-```python
-from angrycat.testsetup import get_setup
-
-# Get setup by architecture
-setup = get_setup(architecture="x86_64")
-
-# Get specific setup by name
-setup = get_setup(name="lab_machine_1")
-
-# Use the setup
-setup.connect()
-# ... run tests ...
-setup.disconnect()
-```
+Check `usage_example.py` for how to use the API.
 
 ## Custom Setup Directories
 
