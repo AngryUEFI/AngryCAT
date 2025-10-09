@@ -776,22 +776,22 @@ class TestSetup:
         return False
 
     def _send_pin_action(self, pin_name):
-        if not self._have_ha_setup():
-            return False
+        if hasattr(self, "_custom_pin_action"):
+            return getattr(self, "_custom_pin_action")(self, pin_name)
+        if self._have_ha_setup():
+            entity_name = f"switch.{self._config.get('ha_entity_name')}_{pin_name}"
 
-        entity_name = f"switch.{self._config.get('ha_entity_name')}_{pin_name}"
+            headers = {
+                "Authorization": f"Bearer {self._config.get('ha_token')}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "entity_id": entity_name
+            }
+            
+            response = requests.post(f"{self._config.get('ha_base_url')}/api/services/switch/turn_on", json=payload, headers=headers)
 
-        headers = {
-            "Authorization": f"Bearer {self._config.get('ha_token')}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "entity_id": entity_name
-        }
-        
-        response = requests.post(f"{self._config.get('ha_base_url')}/api/services/switch/turn_on", json=payload, headers=headers)
-
-        return response.status_code == 200
+            return response.status_code == 200
 
     def pin_reset(self) -> None:
         self._transition_state(ConnectionState.REBOOTING)
@@ -809,6 +809,8 @@ class TestSetup:
             return self._send_pin_action("power_pin_short")
 
     def get_led_status(self):
+        if hasattr(self, "_custom_led_status"):
+            return getattr(self, "_custom_led_status")(self)
         logger.warning("LED status is not implemented.")
         return False
 

@@ -89,6 +89,10 @@ Base class for test setups. A test setup represents a physical or virtual system
 - `refresh_cores()`: Refresh all cores
 - `ready_clean_setup(do_reboot=False)`: Prepare setup for clean testing
 
+#### Optional attributes
+- `_custom_pin_action`: Implement a custom way to handle pin actions, gets the test setup and one of `"reset_pin", "power_pin_long", "power_pin_short"` as argument, return `True` if the call worked
+- `_custom_led_status`: Implement a custom way to get the LED status, gets the test setup as argument, return `True` if the LED is on
+
 **Runtime options:**
 - `auto_reboot_on_error`: set to `False` to prevent automatic recoveries, APIs will raise instead
 - `auto_start_cores`: set to `False` to prevent automatic start of all cores after reboot
@@ -259,6 +263,12 @@ custom_cpu = CpuType(
     }
 )
 
+# define a custom pin action
+def my_custom_action(setup, pin_name) -> bool:
+    if pin_name == "reset_pin":
+        res = url_call("https://example.com")
+        return res.returncode == 200
+
 # Create a test setup
 my_setup = TestSetup(
     name="my_custom_setup",
@@ -267,7 +277,8 @@ my_setup = TestSetup(
     port=3239,
     location="My Lab",
     has_smt=True,
-    notes="Custom test setup"
+    notes="Custom test setup",
+    _custom_pin_action = my_custom_action
 )
 ```
 
