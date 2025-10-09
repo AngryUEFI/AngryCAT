@@ -776,8 +776,9 @@ class TestSetup:
         return False
 
     def _send_pin_action(self, pin_name):
-        if hasattr(self, "_custom_pin_action"):
-            return getattr(self, "_custom_pin_action")(self, pin_name)
+        custom_pin_action = self._config.get("_custom_pin_action")
+        if custom_pin_action is not None:
+            return custom_pin_action(self, pin_name)
         if self._have_ha_setup():
             entity_name = f"switch.{self._config.get('ha_entity_name')}_{pin_name}"
 
@@ -809,8 +810,9 @@ class TestSetup:
             return self._send_pin_action("power_pin_short")
 
     def get_led_status(self):
-        if hasattr(self, "_custom_led_status"):
-            return getattr(self, "_custom_led_status")(self)
+        custom_led_status = self._config.get("_custom_led_status")
+        if custom_led_status is not None:
+            return custom_led_status(self)
         logger.warning("LED status is not implemented.")
         return False
 
