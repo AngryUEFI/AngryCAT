@@ -9,9 +9,36 @@ import subprocess
 
 from keystone import Ks, KS_ARCH_X86, KS_MODE_64
 
-
 import logging
 logger = logging.getLogger()
+
+class LoggerWriter:
+    """File-like stream object that redirects writes to a logger method."""
+    def __init__(self, logger, level_func, prefix=""):
+        self.logger = logger
+        self.level_func = level_func
+        self._buffer = ""
+        self.prefix = prefix
+    def write(self, message):
+        # Called whenever something writes to this "stream"
+        message = message.strip()
+        if message:
+            self.level_func(f"{self.prefix}{message}")
+
+    def flush(self):
+        # For compatibility with file-like objects
+        pass
+
+zenutils_warned = False
+try:
+    from zenutils.masm import MacroAssembler
+    from zenutils.arch.registry import Registry
+except ImportError:
+    if not zenutils_warned:
+        logger.warning("zenutils not installed, macro assembler will not be available")
+        zenutils_warned = True
+    MacroAssembler = None
+    Registry = None
 
 from angrycat.util import generate_temp_filename
 
@@ -250,6 +277,7 @@ class TestSetup:
         # just a shortcut
         self._ucode_revision_msr = 0x0
         self._cached_core_count = 0
+        self.zenutils_spec = None
     
     def _resolve_cpu_type(self) -> None:
         """
@@ -263,6 +291,13 @@ class TestSetup:
                 raise ValueError(f"CPU type '{self._cpu_type_name}' not found in registry")
             self.cpu_type = resolved_cpu_type
             self._ucode_revision_msr = self.architecture.attributes.get("ucode_revision_msr", 0x0)
+            if Registry is not None:
+                arch = self.architecture.name
+                try:
+                    spec = Registry().get(arch)
+                except KeyError:
+                    spec = None
+                self.zenutils_spec = spec
     
     @property
     def architecture(self) -> Architecture:
@@ -925,6 +960,18 @@ class TestSetup:
         result = subprocess.run([self._config.get("zentool_path")] + args, check=False, capture_output=True, text=True)
         return result
     
+    def _sign_zentool(self, ufile: str):
+        args = [
+            "resign",
+            ufile
+        ]
+        result = self._exec_zentool(args)
+        if result.returncode != 0:
+            logger.warning(f"Zentool resign returned returncode:{result.returncode}")
+            logger.warning(f"Zentool resign returned stdout:\n{result.stdout}")
+            logger.warning(f"Zentool resign returned stderr:\n{result.stderr}")
+            raise ValueError(f"Unable to resign via zentool, got code {result.returncode}")
+    
     def _assemble_zentool(self, ucode: List[str], **kwargs) -> bytes:
         result = self._exec_zentool(["--version"])
         if result.returncode != 0:
@@ -951,17 +998,27 @@ class TestSetup:
             logger.warning(f"Zentool assemble returned stderr:\n{result.stderr}")
             raise ValueError(f"Unable to assemble via zentool, got code {result.returncode}")
 
-        args = [
-            "resign",
-            temp_file
-        ]
-        result = self._exec_zentool(args)
-        if result.returncode != 0:
-            logger.warning(f"Zentool resign returned returncode:{result.returncode}")
-            logger.warning(f"Zentool resign returned stdout:\n{result.stdout}")
-            logger.warning(f"Zentool resign returned stderr:\n{result.stderr}")
-            raise ValueError(f"Unable to resign via zentool, got code {result.returncode}")
+        self._sign_zentool(temp_file)
 
+        return bytes(open(temp_file, "rb").read())
+
+    def _assemble_macro_assembler(self, ucode: str, **kwargs) -> bytes:
+        if MacroAssembler is None:
+            raise ValueError("ZenUtils macro assembler not available")
+        if self.zenutils_spec is None:
+            raise ValueError("ZenUtils spec not resolved for architecture {self.architecture.name}")
+        if self.cpu_type is None:
+            raise ValueError("CPU type not resolved for setup '{self.name}'")
+        debug_stream = LoggerWriter(logger, logger.debug, prefix="ZenUtilsMasm: ")
+        assembler = MacroAssembler(spec=self.zenutils_spec)
+        uclines = ucode.splitlines()
+        assembler.discovery_pass(uclines)
+        assembler.placement_pass(uclines)
+        assembler.fixup_pass()
+        temp_file = self._get_ucode_temp_path(self.cpu_type.name)
+        with open(temp_file, "wb") as f:
+            assembler.emit(f, debug_stream, False)
+        self._sign_zentool(temp_file)
         return bytes(open(temp_file, "rb").read())
 
     def assemble_ucode(self, ucode: str | List[str] | ByteString, **kwargs) -> bytes:
@@ -969,7 +1026,7 @@ class TestSetup:
             return bytes(ucode)
         elif isinstance(ucode, str):
             # pass to ZenUtils macro assembler
-            raise ValueError("Not implemented: ZenUtils macro assembler")
+            return self._assemble_macro_assembler(ucode, **kwargs)
         elif isinstance(ucode, List) and all(isinstance(x, str) for x in ucode):
             # list of arguments to zentool
             return self._assemble_zentool(ucode, **kwargs)
