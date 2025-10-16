@@ -11,10 +11,6 @@ mc_subleq = f"""
         mov r15, rax
         mov rdi, [rax]
 
-        mov rbp, 0x200
-
-    loop_start:
-
         // write subleq "instructions" to start of result buffer
         mov rcx, 24
         mov [rdi + 0x00], rcx
@@ -54,9 +50,6 @@ mc_subleq = f"""
 
         // enter subleq
         shld rcx, rcx, 4
-
-        dec rbp
-        jne loop_start
 
         // Return to AnryUEFI
         ret
